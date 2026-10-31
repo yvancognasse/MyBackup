@@ -5,7 +5,10 @@ umask 077
 cd "$(dirname "$0")"
 ROOT_DIR="$(pwd)"
 APP_NAME="MyBackup"
-APP_DIR="$ROOT_DIR/$APP_NAME.app"
+FINAL_APP_DIR="$ROOT_DIR/$APP_NAME.app"
+mkdir -p "$ROOT_DIR/.build"
+STAGING_DIR="$(mktemp -d "$ROOT_DIR/.build/package.XXXXXX")"
+APP_DIR="$STAGING_DIR/$APP_NAME.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
@@ -14,20 +17,20 @@ VENV_DIR="$RESOURCES_DIR/venv"
 SWIFT_SRC="$ROOT_DIR/MyBackupApp.swift"
 BACKEND_PY="$BACKEND_DIR/backend.py"
 EXECUTABLE="$MACOS_DIR/$APP_NAME"
-ICONSET_DIR="$ROOT_DIR/MyBackup.iconset"
+ICONSET_DIR="$STAGING_DIR/MyBackup.iconset"
 ICNS_FILE="$RESOURCES_DIR/MyBackup.icns"
 BACKGROUND_SRC="$ROOT_DIR/MyBackupBackground.png"
 BACKGROUND_FALLBACK_SRC="/Users/yvancognasse/Downloads/MyTranslator/MyTranslatorBackground.png"
 BACKGROUND_FILE="$RESOURCES_DIR/MyBackupBackground.png"
 PREVIOUS_ICON_FILE="$(mktemp /private/tmp/mybackup-previous-icon.XXXXXX)"
-if [ -s "$RESOURCES_DIR/MyBackup.icns" ]; then
-  cp "$RESOURCES_DIR/MyBackup.icns" "$PREVIOUS_ICON_FILE"
+if [ -s "$FINAL_APP_DIR/Contents/Resources/MyBackup.icns" ]; then
+  cp "$FINAL_APP_DIR/Contents/Resources/MyBackup.icns" "$PREVIOUS_ICON_FILE"
 fi
 trap 'rm -f "$PREVIOUS_ICON_FILE"' EXIT
 
 CURRENT_BUILD="1"
-if [ -f "$CONTENTS_DIR/Info.plist" ]; then
-  CURRENT_BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$CONTENTS_DIR/Info.plist" 2>/dev/null || printf "1")"
+if [ -f "$FINAL_APP_DIR/Contents/Info.plist" ]; then
+  CURRENT_BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$FINAL_APP_DIR/Contents/Info.plist" 2>/dev/null || printf "1")"
 fi
 if [[ "$CURRENT_BUILD" == *.* ]]; then
   CURRENT_BUILD="${CURRENT_BUILD##*.}"
@@ -63,7 +66,7 @@ if [ ! -f "$ROOT_DIR/credentials.json" ]; then
   printf "                The app will open, but Google Drive sign-in will fail until credentials.json is present.\n"
 fi
 
-printf "[MyBackup] Cleaning the previous bundle...\n"
+printf "[MyBackup] Preparing a new bundle; previous app retained until verification...\n"
 rm -rf "$APP_DIR" "$ICONSET_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR" "$BACKEND_DIR"
 
@@ -185,6 +188,14 @@ touch "$APP_DIR" "$CONTENTS_DIR/Info.plist" "$ICNS_FILE" 2>/dev/null || true
 printf "[MyBackup] Signing and verifying the local app bundle...\n"
 codesign --force --deep --sign - --timestamp=none "$APP_DIR"
 codesign --verify --deep --strict "$APP_DIR"
+if [ -d "$FINAL_APP_DIR" ]; then
+  mv "$FINAL_APP_DIR" "$STAGING_DIR/Previous-MyBackup.app"
+fi
+if ! mv "$APP_DIR" "$FINAL_APP_DIR"; then
+  [ ! -d "$STAGING_DIR/Previous-MyBackup.app" ] || mv "$STAGING_DIR/Previous-MyBackup.app" "$FINAL_APP_DIR"
+  exit 1
+fi
+APP_DIR="$FINAL_APP_DIR"
 LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 if [ -x "$LSREGISTER" ]; then
   "$LSREGISTER" -f "$APP_DIR" 2>/dev/null || true

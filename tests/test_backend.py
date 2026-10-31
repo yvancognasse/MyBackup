@@ -75,6 +75,89 @@ class BackendTests(unittest.TestCase):
 
             self.assertEqual(calls, {"list": 1, "upload": 100})
 
+    def test_cache_is_bound_to_destination_and_source_mapping(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "cache.json"
+            first = {"root_id": "drive-A", "sources": ["/source"]}
+            sample = {"/source/file": {"size": 4}}
+            with patch.object(backend, "CACHE_FILE", path):
+                backend.save_cache(sample)  # Legacy cache must be ignored in production.
+                self.assertEqual(backend.load_cache(first), {})
+                backend.save_cache(sample, first)
+                self.assertEqual(backend.load_cache(first), sample)
+                self.assertEqual(backend.load_cache({**first, "root_id": "drive-B"}), {})
+                self.assertEqual(backend.load_cache({**first, "sources": ["/other"]}), {})
+                self.assertEqual(backend.load_cache(first), sample)
+
+    def test_changed_during_upload_is_not_cached_and_retries(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "file.txt"
+            path.write_text("before")
+            cache = {str(path): {"size": -1}}
+            stats = {"created": 0, "updated": 0, "skipped": 0, "errors": 0}
+            cfg = {"HTTP_TIMEOUT_SECONDS": 1}
+            def changing_upload(*args):
+                path.write_text("modified during upload")
+                return "created"
+            with patch.object(backend, "get_service", return_value=object()), patch.object(backend, "write_log"), patch.object(backend, "upload_file", side_effect=changing_upload):
+                result = backend.process_one_file(path, "folder", object(), cfg, cache, stats, {})
+            self.assertEqual(result, "error")
+            self.assertNotIn(str(path), cache)
+            self.assertEqual(stats["errors"], 1)
+            with patch.object(backend, "get_service", return_value=object()), patch.object(backend, "upload_file", return_value="updated") as upload:
+                self.assertEqual(backend.process_one_file(path, "folder", object(), cfg, cache, stats, {}), "updated")
+                self.assertTrue(backend.unchanged(path, cache))
+                self.assertEqual(backend.process_one_file(path, "folder", object(), cfg, cache, stats, {}), "skipped")
+                self.assertEqual(upload.call_count, 1)
+
+    def test_changed_source_updates_even_a_newer_remote_copy_of_same_size(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "file.txt"
+            path.write_text("data")
+            stats = {"created": 0, "updated": 0, "skipped": 0, "errors": 0}
+            remote = {path.name: {"id": "existing", "size": 4, "modifiedTime": "2099-01-01T00:00:00Z"}}
+            with patch.object(backend, "get_service", return_value=object()), patch.object(backend, "upload_file", return_value="updated") as upload:
+                self.assertEqual(backend.process_one_file(path, "folder", object(), {"HTTP_TIMEOUT_SECONDS": 1}, {}, stats, remote), "updated")
+                self.assertEqual(upload.call_args.args[3]["id"], "existing")
+
+    def test_missing_and_unreadable_sources_raise_instead_of_succeeding(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with self.assertRaises(FileNotFoundError):
+                backend.scan_tree([root / "disconnected"], True)
+            def unreadable(*args, **kwargs):
+                kwargs["onerror"](PermissionError("Access denied"))
+                return iter(())
+            with patch.object(backend.os, "walk", side_effect=unreadable), self.assertRaisesRegex(OSError, "incomplete"):
+                backend.scan_tree([root], True)
+
+    def test_destination_change_uploads_again_and_same_destination_skips(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            runtime = root / "runtime"
+            runtime.mkdir()
+            source = root / "source"
+            source.mkdir()
+            (source / "file.txt").write_text("data")
+            config = runtime / "config"
+            config.write_text(f"SOURCE_DIRS={source}\nDRIVE_FOLDER_NAME=first\n")
+            with (
+                patch.multiple(backend, HOME=runtime, ENV_FILE=config, CACHE_FILE=runtime / "cache.json", LOG_FILE=runtime / "run.log"),
+                patch.object(backend, "authenticate", return_value=object()),
+                patch.object(backend, "build_service", return_value=object()),
+                patch.object(backend, "get_service", return_value=object()),
+                patch.object(backend, "get_or_create_folder", side_effect=lambda service, name, parent=None: (f"{parent}/{name}", False)),
+                patch.object(backend, "list_folder", return_value={}),
+                patch.object(backend, "upload_file", return_value="created") as upload,
+                patch.object(backend, "emit"),
+            ):
+                backend.run_backup()
+                backend.run_backup()
+                self.assertEqual(upload.call_count, 1)
+                config.write_text(f"SOURCE_DIRS={source}\nDRIVE_FOLDER_NAME=second\n")
+                backend.run_backup()
+                self.assertEqual(upload.call_count, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -17,3 +17,17 @@ git push origin main
 ```
 
 Use `MyBackup.env.example` as a template for local `MyBackup.env`. Provide your own Google OAuth `credentials.json` locally. The generated authentication tokens must never be committed.
+
+## Backup reliability
+
+The cache is tied to the actual Google Drive destination and selected source roots. Changing either, or upgrading from the older cache format, rechecks and sends the source files again. Existing Drive files are updated by name; the old backup destination is preserved. Unchanged files use the local cache, so external Drive deletions are not continuously audited.
+
+A source folder that is missing or cannot be scanned interrupts the run with an error. Reconnect the source or correct its permissions before retrying. A file modified during upload is reported as an error and remains eligible for the next run; close applications writing that file and run the backup again. Changed source files are uploaded even when their timestamps are older than the Drive copy. No remote files are deleted by these checks.
+
+Run the offline regression suite using the bundled Python environment:
+
+```sh
+MyBackup.app/Contents/Resources/venv/bin/python -m unittest discover -s tests -v
+```
+
+Builds are prepared and verified in `.build` before replacing the application. The previous bundle is retained in the staging directory if a build or signing step fails.

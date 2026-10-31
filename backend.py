@@ -7,7 +7,7 @@ import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime
 
 import httplib2
 import google_auth_httplib2
@@ -98,13 +98,20 @@ def load_env():
     return cfg
 
 
-def load_cache():
+def load_cache(destination=None):
     if CACHE_FILE.exists():
         try:
             with open(CACHE_FILE, "r", encoding="utf-8") as f:
                 cache = json.load(f)
             if isinstance(cache, dict):
-                return cache
+                if cache.get("version") == 2 and isinstance(cache.get("files"), dict):
+                    if destination is None or cache.get("destination") == destination:
+                        return cache["files"]
+                    return {}
+                # Legacy entries do not identify their Drive destination.
+                if destination is None:
+                    return cache
+                return {}
         except Exception:
             pass
         write_log("WARNING cache is unreadable; starting with an empty cache")
@@ -126,9 +133,11 @@ def atomic_write_json(path, value):
         raise
 
 
-def save_cache(cache):
+def save_cache(cache, destination=None):
     with _cache_lock:
         snapshot = dict(cache)
+    if destination is not None:
+        snapshot = {"version": 2, "destination": destination, "files": snapshot}
     atomic_write_json(CACHE_FILE, snapshot)
 
 
@@ -211,7 +220,8 @@ def list_folder(service, folder_id):
 
 def signature(path):
     st = path.stat()
-    return {"size": st.st_size, "mtime_ms": int(st.st_mtime * 1000)}
+    return {"size": st.st_size, "mtime_ns": st.st_mtime_ns,
+            "ctime_ns": st.st_ctime_ns, "inode": st.st_ino, "device": st.st_dev}
 
 
 def unchanged(path, cache):
@@ -221,22 +231,6 @@ def unchanged(path, cache):
         return cached == signature(path)
     except OSError:
         return False
-
-
-def needs_upload(path, drive_item):
-    if not drive_item:
-        return True
-    try:
-        if path.stat().st_size != int(drive_item.get("size", -1)):
-            return True
-        raw = drive_item.get("modifiedTime")
-        if raw:
-            local_mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
-            drive_mtime = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-            return (local_mtime - drive_mtime).total_seconds() > 2
-    except Exception:
-        return True
-    return False
 
 
 def upload_file(service, path, folder_id, drive_item, cfg):
@@ -274,13 +268,14 @@ def scan_tree(source_dirs, skip_hidden):
 
     for src in source_dirs:
         if is_runtime_dir(src):
-            write_log(f"WARNING source folder is inside MyBackup runtime and was skipped: {src}")
-            continue
+            raise ValueError(f"Source folder is inside MyBackup runtime: {src}")
         if not src.is_dir():
-            write_log(f"ERROR source folder does not exist: {src}")
-            continue
+            raise FileNotFoundError(f"Source folder is unavailable; backup is incomplete: {src}")
         dirs.append(src)
-        for root, subdirs, names in os.walk(src):
+        def scan_failed(error):
+            raise OSError(f"Cannot scan source; backup is incomplete: {error}") from error
+
+        for root, subdirs, names in os.walk(src, onerror=scan_failed):
             root_path = Path(root)
             subdirs[:] = [d for d in subdirs if not is_runtime_dir(root_path / d)]
             if skip_hidden:
@@ -351,22 +346,25 @@ def build_drive_folder_map(service, root_drive_id, source_dirs, dirs, start_time
 
 def process_one_file(path, folder_id, creds, cfg, cache, stats, folder_contents):
     try:
-        if unchanged(path, cache):
+        before = signature(path)
+        with _cache_lock:
+            cached = cache.get(str(path))
+        if cached == before:
             with _stats_lock:
                 stats["skipped"] += 1
             return "skipped"
-        drive_item = folder_contents.get(path.name)
-        if needs_upload(path, drive_item):
-            service = get_service(creds, cfg["HTTP_TIMEOUT_SECONDS"])
-            result = upload_file(service, path, folder_id, drive_item, cfg)
-            with _stats_lock:
-                stats[result] += 1
-        else:
-            result = "skipped"
-            with _stats_lock:
-                stats["skipped"] += 1
+        # A changed source is authoritative, even if Drive has a newer timestamp.
+        # Remove the old entry before upload so errors always leave this file retryable.
         with _cache_lock:
-            cache[str(path)] = signature(path)
+            cache.pop(str(path), None)
+        service = get_service(creds, cfg["HTTP_TIMEOUT_SECONDS"])
+        result = upload_file(service, path, folder_id, folder_contents.get(path.name), cfg)
+        if signature(path) != before:
+            raise OSError("File changed during upload; it will be retried on the next backup")
+        with _cache_lock:
+            cache[str(path)] = before
+        with _stats_lock:
+            stats[result] += 1
         return result
     except Exception as exc:
         write_log(f"ERROR file {path}: {exc}")
@@ -377,7 +375,6 @@ def process_one_file(path, folder_id, creds, cfg, cache, stats, folder_contents)
 
 def run_backup():
     cfg = load_env()
-    cache = load_cache()
     stats = {"created": 0, "updated": 0, "skipped": 0, "errors": 0, "total": 0}
     t0 = time.time()
     write_log("Backup started")
@@ -388,6 +385,11 @@ def run_backup():
 
     emit("status", message="Finding the Drive root folder...")
     root_drive_id, _ = get_or_create_folder(service, cfg["DRIVE_FOLDER_NAME"], cfg["DRIVE_PARENT_ID"])
+    # Drive IDs identify the actual destination (including the account). Source
+    # roots affect the relative folder mapping and must invalidate the cache too.
+    cache_destination = {"root_id": root_drive_id,
+                   "sources": sorted(str(p.resolve()) for p in cfg["SOURCE_DIRS"])}
+    cache = load_cache(cache_destination)
 
     emit("status", message="Scanning local folders and files...")
     dirs, files = scan_tree(cfg["SOURCE_DIRS"], cfg["SKIP_HIDDEN"])
@@ -450,7 +452,7 @@ def run_backup():
                 with _stats_lock:
                     stats["errors"] += 1
             if done % cfg["CACHE_SAVE_EVERY"] == 0:
-                save_cache(cache)
+                save_cache(cache, cache_destination)
             now = time.time()
             if done == 1 or done == len(futures) or now - last_emit >= 0.25:
                 last_emit = now
@@ -469,7 +471,7 @@ def run_backup():
                     elapsed=int(time.time() - t0),
                 )
 
-    save_cache(cache)
+    save_cache(cache, cache_destination)
     with _stats_lock:
         final_stats = dict(stats)
     write_log(f"Backup completed: {final_stats}")
