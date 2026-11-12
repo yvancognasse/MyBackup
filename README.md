@@ -24,6 +24,10 @@ The cache is tied to the actual Google Drive destination and selected source roo
 
 A source folder that is missing or cannot be scanned interrupts the run with an error. Reconnect the source or correct its permissions before retrying. A file modified during upload is reported as an error and remains eligible for the next run; close applications writing that file and run the backup again. Changed source files are uploaded even when their timestamps are older than the Drive copy.
 
+## Settings
+
+Settings initially show source folders, the Drive destination, hidden-file handling and retention. A small disclosure icon to the right of **Transfert et performance** expands or collapses the advanced transfer settings. Collapsing the section preserves its values; Save includes hidden settings. The section starts collapsed whenever Settings is reopened.
+
 ## Deleted source files
 
 In Settings, **Conserver dans Drive les fichiers supprimés de la source** is checked by default. Uncheck it and save to move tracked Drive copies of deleted source files to the Drive trash after a successful backup. Dormant preferences imported by older versions do not enable cleanup; an explicit choice saved in the new UI is required. This never permanently deletes files or removes folders. For backend-only use, set `DELETE_REMOVED=true` (default: `false`).
