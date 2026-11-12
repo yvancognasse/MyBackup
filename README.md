@@ -26,7 +26,7 @@ A source folder that is missing or cannot be scanned interrupts the run with an 
 
 ## Settings
 
-Settings initially show source folders, the Drive destination, hidden-file handling and retention. A small disclosure icon to the right of **Transfert et performance** expands or collapses the advanced transfer settings. Collapsing the section preserves its values; Save includes hidden settings. The section starts collapsed whenever Settings is reopened.
+Settings show source folders, the Drive destination, hidden-file handling and retention. Transfer and performance options are managed internally using existing saved values or application defaults. Saving Settings preserves these internal values.
 
 ## Deleted source files
 

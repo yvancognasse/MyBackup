@@ -204,10 +204,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var setupFields: [String: NSTextField] = [:]
     var skipHiddenCheckbox: NSButton?
     var keepRemovedCheckbox: NSButton?
-    var advancedSettingsViews: [NSView] = []
-    var setupTopViews: [NSView] = []
-    var advancedSettingsButton: NSButton?
-    var advancedSettingsVisible = true
 
     let setupKeys = [
         "SOURCE_DIRS",
@@ -488,13 +484,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @objc func showSetup() {
         if let existingSetupWindow = setupWindow {
-            setAdvancedSettingsVisible(false)
             existingSetupWindow.makeKeyAndOrderFront(nil)
             return
         }
 
         let panel = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 820, height: 660),
+            contentRect: NSRect(x: 0, y: 0, width: 820, height: 420),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -545,44 +540,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         content.addSubview(keep)
 
         for view in content.subviews {
-            view.frame.origin.y -= 170
-        }
-
-        let performanceHeading = label("Transfert et performance", size: 12, weight: .bold, color: ModernStyle.ink)
-        performanceHeading.frame = NSRect(x: 30, y: 365, width: 410, height: 20)
-        content.addSubview(performanceHeading)
-        let advancedStart = content.subviews.count
-        content.addSubview(ModernStyle.box(NSRect(x: 28, y: 161, width: 764, height: 193), fill: ModernStyle.paper))
-
-        setupTextField("MAX_WORKERS", y: 307, parent: content, width: 92, labelX: 48, fieldX: 225, labelWidth: 170)
-        addInfoButton("MAX_WORKERS", x: 323, y: 307, parent: content)
-        setupTextField("UPLOAD_CHUNK_MB", y: 267, parent: content, width: 92, labelX: 48, fieldX: 225, labelWidth: 170)
-        addInfoButton("UPLOAD_CHUNK_MB", x: 323, y: 267, parent: content)
-        setupTextField("SMALL_FILE_LIMIT_MB", y: 227, parent: content, width: 92, labelX: 48, fieldX: 225, labelWidth: 170)
-        addInfoButton("SMALL_FILE_LIMIT_MB", x: 323, y: 227, parent: content)
-        setupTextField("MAX_RETRIES", y: 187, parent: content, width: 92, labelX: 48, fieldX: 225, labelWidth: 170)
-        addInfoButton("MAX_RETRIES", x: 323, y: 187, parent: content)
-
-        setupTextField("RETRY_DELAY_SECONDS", y: 307, parent: content, width: 88, labelX: 422, fieldX: 650, labelWidth: 220)
-        addInfoButton("RETRY_DELAY_SECONDS", x: 747, y: 307, parent: content)
-        setupTextField("HTTP_TIMEOUT_SECONDS", y: 267, parent: content, width: 88, labelX: 422, fieldX: 650, labelWidth: 220)
-        addInfoButton("HTTP_TIMEOUT_SECONDS", x: 747, y: 267, parent: content)
-        setupTextField("CACHE_SAVE_EVERY", y: 227, parent: content, width: 88, labelX: 422, fieldX: 650, labelWidth: 220)
-        addInfoButton("CACHE_SAVE_EVERY", x: 747, y: 227, parent: content)
-        advancedSettingsViews = Array(content.subviews.dropFirst(advancedStart))
-
-        for view in content.subviews {
-            view.frame.origin.y -= 80
-        }
-
-        let advancedToggle = NSButton(title: "▾", target: self, action: #selector(toggleAdvancedSettings))
-        advancedToggle.frame = NSRect(x: 760, y: 280, width: 32, height: 28)
-        advancedToggle.isBordered = false
-        advancedToggle.font = ModernStyle.font(18, weight: .medium)
-        advancedSettingsButton = advancedToggle
-        content.addSubview(advancedToggle)
-        setupTopViews = content.subviews.filter { view in
-            !advancedSettingsViews.contains(where: { $0 === view })
+            view.frame.origin.y -= 490
         }
 
         let cancel = secondaryButton("Annuler", action: #selector(closeSetup))
@@ -593,36 +551,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         content.addSubview(save)
 
         setupWindow = panel
-        advancedSettingsVisible = true
-        setAdvancedSettingsVisible(false)
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-    }
-
-    @objc func toggleAdvancedSettings() {
-        setAdvancedSettingsVisible(!advancedSettingsVisible)
-    }
-
-    func setAdvancedSettingsVisible(_ visible: Bool) {
-        guard let panel = setupWindow else { return }
-        // Commit editing before hiding a field; its value stays available to Save.
-        panel.makeFirstResponder(nil)
-        if visible != advancedSettingsVisible {
-            let delta: CGFloat = visible ? 210 : -210
-            for view in setupTopViews {
-                view.frame.origin.y += delta
-            }
-            var frame = panel.frame
-            frame.origin.y -= delta
-            frame.size.height += delta
-            panel.setFrame(frame, display: true)
-        }
-        advancedSettingsVisible = visible
-        advancedSettingsViews.forEach { $0.isHidden = !visible }
-        advancedSettingsButton?.title = visible ? "▾" : "▸"
-        let action = visible ? "Masquer les options avancées" : "Afficher les options avancées"
-        advancedSettingsButton?.toolTip = action
-        advancedSettingsButton?.setAccessibilityLabel(action)
     }
 
     @objc func chooseSourceFolder() {
@@ -642,7 +572,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc func saveSetup() {
         let defaults = UserDefaults.standard
         for key in setupKeys where key != "SKIP_HIDDEN" && key != "DELETE_REMOVED" && key != "DRIVE_PARENT_ID" {
-            let rawValue = setupFields[key]?.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard let field = setupFields[key] else { continue }
+            let rawValue = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             let value = key == "SOURCE_DIRS" ? sourceFoldersStorageValue(rawValue) : rawValue
             defaults.set(value, forKey: key)
         }
