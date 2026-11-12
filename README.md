@@ -22,7 +22,15 @@ Use `MyBackup.env.example` as a template for local `MyBackup.env`. Provide your 
 
 The cache is tied to the actual Google Drive destination and selected source roots. Changing either, or upgrading from the older cache format, rechecks and sends the source files again. Existing Drive files are updated by name; the old backup destination is preserved. Unchanged files use the local cache, so external Drive deletions are not continuously audited.
 
-A source folder that is missing or cannot be scanned interrupts the run with an error. Reconnect the source or correct its permissions before retrying. A file modified during upload is reported as an error and remains eligible for the next run; close applications writing that file and run the backup again. Changed source files are uploaded even when their timestamps are older than the Drive copy. No remote files are deleted by these checks.
+A source folder that is missing or cannot be scanned interrupts the run with an error. Reconnect the source or correct its permissions before retrying. A file modified during upload is reported as an error and remains eligible for the next run; close applications writing that file and run the backup again. Changed source files are uploaded even when their timestamps are older than the Drive copy.
+
+## Deleted source files
+
+In Settings, **Conserver dans Drive les fichiers supprimés de la source** is checked by default. Uncheck it and save to move tracked Drive copies of deleted source files to the Drive trash after a successful backup. Dormant preferences imported by older versions do not enable cleanup; an explicit choice saved in the new UI is required. This never permanently deletes files or removes folders. For backend-only use, set `DELETE_REMOVED=true` (default: `false`).
+
+Cleanup requires a complete source scan and zero backup errors. It uses the saved Drive file ID, parent folder and SHA-256 checksum. Copies renamed, moved or edited in Drive are preserved. Existing local files, symlinks, hidden files excluded by settings, paths outside the selected roots and Drive copies shared with another live source path are preserved. Missing source roots or cleanup failures stop deletion; failed items stay in the cache for retry.
+
+Older cache entries without a Drive file ID cannot authorize deletion. When cleanup is enabled, still-present files are verified against Drive once to record their IDs. Copies of files already deleted before this tracking was established are retained and noted in the log. Changing the destination or selected roots invalidates the cache, so cleanup never uses another destination's history.
 
 File cache entries now include a SHA-256 content digest. Matching metadata takes the fast path; a changed volume identifier, timestamp, or inode triggers a local content check. Identical content refreshes the metadata without uploading again. Content edits of the same size with a preserved modification time are detected through the change timestamp and digest. Files that change while being read are retried once, then reported as errors if still unstable.
 

@@ -96,7 +96,7 @@ class BackendTests(unittest.TestCase):
                 with self.subTest(remote=remote):
                     cache = {str(path): backend.signature(path)}
                     stats = {"created": 0, "updated": 0, "skipped": 0, "errors": 0}
-                    with patch.object(backend, "get_service", return_value=object()), patch.object(backend, "upload_file", return_value="updated") as upload:
+                    with patch.object(backend, "get_service", return_value=object()), patch.object(backend, "upload_file", return_value=("updated", "remote")) as upload:
                         self.assertEqual(backend.process_one_file(path, "folder", object(), {"HTTP_TIMEOUT_SECONDS": 1}, cache, stats, {path.name: remote}), "updated")
                     upload.assert_called_once()
                     self.assertTrue(backend.unchanged(path, cache))
@@ -149,7 +149,7 @@ class BackendTests(unittest.TestCase):
 
             def upload_file(service, path, folder_id, drive_item, cfg):
                 calls["upload"] += 1
-                return "created"
+                return "created", "remote"
 
             with (
                 patch.object(backend, "HOME", runtime),
@@ -192,13 +192,13 @@ class BackendTests(unittest.TestCase):
             cfg = {"HTTP_TIMEOUT_SECONDS": 1}
             def changing_upload(*args):
                 path.write_text("modified during upload")
-                return "created"
+                return "created", "remote"
             with patch.object(backend, "get_service", return_value=object()), patch.object(backend, "write_log"), patch.object(backend, "upload_file", side_effect=changing_upload):
                 result = backend.process_one_file(path, "folder", object(), cfg, cache, stats, {})
             self.assertEqual(result, "error")
             self.assertNotIn(str(path), cache)
             self.assertEqual(stats["errors"], 1)
-            with patch.object(backend, "get_service", return_value=object()), patch.object(backend, "upload_file", return_value="updated") as upload:
+            with patch.object(backend, "get_service", return_value=object()), patch.object(backend, "upload_file", return_value=("updated", "remote")) as upload:
                 self.assertEqual(backend.process_one_file(path, "folder", object(), cfg, cache, stats, {}), "updated")
                 self.assertTrue(backend.unchanged(path, cache))
                 self.assertEqual(backend.process_one_file(path, "folder", object(), cfg, cache, stats, {}), "skipped")
@@ -210,7 +210,7 @@ class BackendTests(unittest.TestCase):
             path.write_text("data")
             stats = {"created": 0, "updated": 0, "skipped": 0, "errors": 0}
             remote = {path.name: {"id": "existing", "size": 4, "modifiedTime": "2099-01-01T00:00:00Z"}}
-            with patch.object(backend, "get_service", return_value=object()), patch.object(backend, "upload_file", return_value="updated") as upload:
+            with patch.object(backend, "get_service", return_value=object()), patch.object(backend, "upload_file", return_value=("updated", "remote")) as upload:
                 self.assertEqual(backend.process_one_file(path, "folder", object(), {"HTTP_TIMEOUT_SECONDS": 1}, {}, stats, remote), "updated")
                 self.assertEqual(upload.call_args.args[3]["id"], "existing")
 
@@ -242,7 +242,7 @@ class BackendTests(unittest.TestCase):
                 patch.object(backend, "get_service", return_value=object()),
                 patch.object(backend, "get_or_create_folder", side_effect=lambda service, name, parent=None: (f"{parent}/{name}", False)),
                 patch.object(backend, "list_folder", return_value={}),
-                patch.object(backend, "upload_file", return_value="created") as upload,
+                patch.object(backend, "upload_file", return_value=("created", "remote")) as upload,
                 patch.object(backend, "emit"),
             ):
                 backend.run_backup()

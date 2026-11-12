@@ -203,12 +203,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var setupWindow: NSWindow?
     var setupFields: [String: NSTextField] = [:]
     var skipHiddenCheckbox: NSButton?
+    var keepRemovedCheckbox: NSButton?
 
     let setupKeys = [
         "SOURCE_DIRS",
         "DRIVE_FOLDER_NAME",
         "DRIVE_PARENT_ID",
         "SKIP_HIDDEN",
+        "DELETE_REMOVED",
         "MAX_WORKERS",
         "UPLOAD_CHUNK_MB",
         "SMALL_FILE_LIMIT_MB",
@@ -223,6 +225,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         "DRIVE_FOLDER_NAME": "MyBackup",
         "DRIVE_PARENT_ID": "",
         "SKIP_HIDDEN": "true",
+        "DELETE_REMOVED": "false",
         "MAX_WORKERS": "12",
         "UPLOAD_CHUNK_MB": "32",
         "SMALL_FILE_LIMIT_MB": "20",
@@ -370,6 +373,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func setupValue(_ key: String) -> String {
+        // Older versions imported this dormant flag without offering a choice.
+        // Require an explicit save in the new UI before enabling remote cleanup.
+        if key == "DELETE_REMOVED" && !UserDefaults.standard.bool(forKey: "RETENTION_CHOICE_SAVED") {
+            return "false"
+        }
         if let value = UserDefaults.standard.string(forKey: key), !value.isEmpty {
             return value
         }
@@ -500,7 +508,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let title = label("Réglages MyBackup", size: 23, weight: .semibold, color: ModernStyle.ink)
         title.frame = NSRect(x: 30, y: 844, width: 762, height: 29)
         content.addSubview(title)
-        let hint = label("Les fichiers supprimés de vos dossiers locaux restent conservés dans Google Drive.", size: 12, color: ModernStyle.dimPhosphor)
+        let hint = label("Choisissez les dossiers à sauvegarder et le traitement des fichiers supprimés.", size: 12, color: ModernStyle.dimPhosphor)
         hint.frame = NSRect(x: 31, y: 820, width: 761, height: 19)
         content.addSubview(hint)
 
@@ -518,14 +526,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         setupTextField("DRIVE_FOLDER_NAME", y: 628, parent: content, width: 470, height: 29, labelX: 48, fieldX: 210, labelWidth: 155)
         let skip = NSButton(checkboxWithTitle: "Ignorer les fichiers cachés", target: nil, action: nil)
-        skip.frame = NSRect(x: 205, y: 582, width: 250, height: 27)
+        skip.frame = NSRect(x: 205, y: 596, width: 400, height: 27)
         skip.font = ModernStyle.font(12)
         skip.state = setupValue("SKIP_HIDDEN").lowercased() == "true" ? .on : .off
         skipHiddenCheckbox = skip
         content.addSubview(skip)
-        let retentionNote = label("Conservation des suppressions dans Drive", size: 10, color: ModernStyle.ink)
-        retentionNote.frame = NSRect(x: 460, y: 586, width: 310, height: 20)
-        content.addSubview(retentionNote)
+        let keep = NSButton(checkboxWithTitle: "Conserver dans Drive les fichiers supprimés de la source", target: nil, action: nil)
+        keep.frame = NSRect(x: 205, y: 568, width: 570, height: 27)
+        keep.font = ModernStyle.font(12)
+        keep.state = setupValue("DELETE_REMOVED").lowercased() == "true" ? .off : .on
+        keep.toolTip = "Si décoché, les fichiers suivis par MyBackup et supprimés de la source sont placés dans la corbeille Drive après une sauvegarde sans erreur. Les dossiers sont conservés."
+        keepRemovedCheckbox = keep
+        content.addSubview(keep)
 
         for view in content.subviews {
             view.frame.origin.y -= 170
@@ -584,13 +596,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @objc func saveSetup() {
         let defaults = UserDefaults.standard
-        for key in setupKeys where key != "SKIP_HIDDEN" && key != "DRIVE_PARENT_ID" {
+        for key in setupKeys where key != "SKIP_HIDDEN" && key != "DELETE_REMOVED" && key != "DRIVE_PARENT_ID" {
             let rawValue = setupFields[key]?.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let value = key == "SOURCE_DIRS" ? sourceFoldersStorageValue(rawValue) : rawValue
             defaults.set(value, forKey: key)
         }
         defaults.set("", forKey: "DRIVE_PARENT_ID")
         defaults.set(skipHiddenCheckbox?.state == .on ? "true" : "false", forKey: "SKIP_HIDDEN")
+        defaults.set(keepRemovedCheckbox?.state == .off ? "true" : "false", forKey: "DELETE_REMOVED")
+        defaults.set(true, forKey: "RETENTION_CHOICE_SAVED")
         defaults.set(true, forKey: "SETUP_IMPORTED")
         defaults.synchronize()
         closeSetup()
@@ -941,6 +955,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             "Detecting changed files...": "Détection des modifications…",
             "Preparing Drive folders...": "Préparation des dossiers Drive…",
             "Reading Drive file checksums...": "Vérification des fichiers Drive…",
+            "Moving removed files to Drive trash...": "Traitement des fichiers supprimés…",
             "Backing up files...": "Sauvegarde des fichiers…"
         ]
         return messages[message] ?? message
@@ -978,6 +993,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             let total = obj["total"] as? Int ?? 0
             detailLabel.stringValue = "\(checked)/\(total) dossiers lus"
             setProgress(total > 0 ? Double(checked) * 100 / Double(total) : 100, title: "Lecture des dossiers Drive")
+        } else if event == "deletion_progress" {
+            let checked = obj["checked"] as? Int ?? 0
+            let total = obj["total"] as? Int ?? 0
+            let deleted = obj["deleted"] as? Int ?? 0
+            pathLabel.stringValue = ""
+            detailLabel.stringValue = "\(checked)/\(total) suppressions vérifiées · \(deleted) fichiers placés dans la corbeille Drive"
+            setProgress(total > 0 ? Double(checked) * 100 / Double(total) : 100, title: "Traitement des suppressions")
         } else if event == "scan_done" {
             let folders = obj["folders"] as? Int ?? 0
             let files = obj["files"] as? Int ?? 0
@@ -1016,10 +1038,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             let updated = stats["updated"] as? Int ?? 0
             let skipped = stats["skipped"] as? Int ?? 0
             let errors = stats["errors"] as? Int ?? 0
+            let deleted = stats["deleted"] as? Int ?? 0
             setProgress(100, title: "Sauvegarde terminée")
             updateStages(active: nil, completed: 3)
             statusLabel.stringValue = errors > 0 ? "Sauvegarde terminée avec erreurs" : "Sauvegarde terminée"
-            pathLabel.stringValue = "\(copied) créés · \(updated) mis à jour · \(skipped) ignorés · \(errors) erreurs"
+            pathLabel.stringValue = "\(copied) créés · \(updated) mis à jour · \(skipped) ignorés · \(deleted) à la corbeille · \(errors) erreurs"
             detailLabel.stringValue = "\(total) fichiers · \(formatDuration(elapsed))"
             backupDidFinish = true
             stopRequested = false

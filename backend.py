@@ -17,6 +17,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
+from googleapiclient.errors import HttpError
 
 os.umask(0o077)
 httplib2.REDIRECT_CODES = frozenset(c for c in httplib2.REDIRECT_CODES if c != 308)
@@ -67,6 +68,7 @@ def load_env():
         "DRIVE_FOLDER_NAME",
         "DRIVE_PARENT_ID",
         "SKIP_HIDDEN",
+        "DELETE_REMOVED",
         "MAX_WORKERS",
         "UPLOAD_CHUNK_MB",
         "SMALL_FILE_LIMIT_MB",
@@ -86,6 +88,7 @@ def load_env():
     cfg["DRIVE_FOLDER_NAME"] = cfg.get("DRIVE_FOLDER_NAME", "MyBackup")
     cfg["DRIVE_PARENT_ID"] = cfg.get("DRIVE_PARENT_ID") or None
     cfg["SKIP_HIDDEN"] = parse_bool(cfg.get("SKIP_HIDDEN", "true"), True)
+    cfg["DELETE_REMOVED"] = parse_bool(cfg.get("DELETE_REMOVED", "false"))
     cfg["MAX_WORKERS"] = int(cfg.get("MAX_WORKERS", "8"))
     cfg["UPLOAD_CHUNK_SIZE"] = int(float(cfg.get("UPLOAD_CHUNK_MB", "32")) * 1024 * 1024)
     cfg["SMALL_FILE_LIMIT"] = int(float(cfg.get("SMALL_FILE_LIMIT_MB", "20")) * 1024 * 1024)
@@ -240,7 +243,7 @@ def unchanged(path, cache):
         if verified["sha256"] != cached["sha256"]:
             return False
         with _cache_lock:
-            cache[str(path)] = verified
+            cache[str(path)] = {**cached, **verified}
         return True
     except OSError:
         return False
@@ -275,9 +278,9 @@ def upload_file(service, path, folder_id, drive_item, cfg):
             )
             if drive_item:
                 service.files().update(fileId=drive_item["id"], media_body=media).execute()
-                return "updated"
-            service.files().create(body={"name": path.name, "parents": [folder_id]}, media_body=media, fields="id").execute()
-            return "created"
+                return "updated", drive_item["id"]
+            created = service.files().create(body={"name": path.name, "parents": [folder_id]}, media_body=media, fields="id").execute()
+            return "created", created["id"]
         except Exception as exc:
             last_exc = exc
             if attempt < cfg["MAX_RETRIES"]:
@@ -374,7 +377,7 @@ def build_drive_folder_map(service, root_drive_id, source_dirs, dirs, start_time
 
 def process_one_file(path, folder_id, creds, cfg, cache, stats, folder_contents):
     try:
-        if unchanged(path, cache):
+        if unchanged(path, cache) and (not cfg.get("DELETE_REMOVED") or cache[str(path)].get("drive_id")):
             with _stats_lock:
                 stats["skipped"] += 1
             return "skipped"
@@ -386,16 +389,16 @@ def process_one_file(path, folder_id, creds, cfg, cache, stats, folder_contents)
         drive_item = folder_contents.get(path.name)
         if drive_item and drive_item.get("sha256Checksum") == before["sha256"]:
             with _cache_lock:
-                cache[str(path)] = before
+                cache[str(path)] = {**before, "drive_id": drive_item["id"], "drive_parent_id": folder_id}
             with _stats_lock:
                 stats["skipped"] += 1
             return "skipped"
         service = get_service(creds, cfg["HTTP_TIMEOUT_SECONDS"])
-        result = upload_file(service, path, folder_id, drive_item, cfg)
+        result, drive_id = upload_file(service, path, folder_id, drive_item, cfg)
         if signature(path) != {k: v for k, v in before.items() if k != "sha256"}:
             raise OSError("File changed during upload; it will be retried on the next backup")
         with _cache_lock:
-            cache[str(path)] = before
+            cache[str(path)] = {**before, "drive_id": drive_id, "drive_parent_id": folder_id}
         with _stats_lock:
             stats[result] += 1
         return result
@@ -406,9 +409,79 @@ def process_one_file(path, folder_id, creds, cfg, cache, stats, folder_contents)
         return "error"
 
 
+def trash_removed_files(service, cfg, cache, stats, scanned_files):
+    if not cfg["DELETE_REMOVED"] or stats["errors"]:
+        return
+    present = {str(p) for p in scanned_files}
+    active_ids = {entry.get("drive_id") for name, entry in cache.items()
+                  if name in present and isinstance(entry, dict)}
+    roots = cfg["SOURCE_DIRS"]
+    candidates = []
+    for name, entry in list(cache.items()):
+        path = Path(name)
+        root = root_for_path(path, roots)
+        if name in present or root is None or path == root or not isinstance(entry, dict):
+            continue
+        relative = path.relative_to(root)
+        if ".." in relative.parts or (cfg["SKIP_HIDDEN"] and any(p.startswith(".") for p in relative.parts)):
+            continue
+        if not all(entry.get(k) for k in ("drive_id", "drive_parent_id", "sha256")):
+            write_log(f"WARNING kept untracked Drive copy for removed source: {path}")
+            continue  # Old entries without remote identity cannot authorize deletion.
+        if entry["drive_id"] in active_ids:
+            continue  # Another live source path still uses this Drive file.
+        candidates.append((path, entry))
+    for checked, (path, entry) in enumerate(candidates, 1):
+        try:
+            # A disconnected source or an existing but excluded/symlinked file
+            # must never be interpreted as a deletion. lstat raises on denial.
+            for root in roots:
+                if not root.is_dir():
+                    raise OSError(f"Source unavailable; deletion cancelled: {root}")
+            try:
+                path.lstat()
+                continue
+            except FileNotFoundError:
+                pass
+            remote = service.files().get(fileId=entry["drive_id"], fields="id,name,parents,trashed,sha256Checksum,mimeType").execute(num_retries=3)
+            if not remote.get("trashed"):
+                if (remote.get("name") != path.name or
+                        remote.get("parents") != [entry["drive_parent_id"]] or
+                        remote.get("sha256Checksum") != entry["sha256"] or
+                        remote.get("mimeType") == "application/vnd.google-apps.folder"):
+                    write_log(f"WARNING kept changed or moved Drive file for removed source: {path}")
+                    continue
+                # Check again after the network read in case the file reappeared.
+                for root in roots:
+                    if not root.is_dir():
+                        raise OSError(f"Source unavailable; deletion cancelled: {root}")
+                try:
+                    path.lstat()
+                    continue
+                except FileNotFoundError:
+                    pass
+                service.files().update(fileId=entry["drive_id"], body={"trashed": True}, fields="id").execute(num_retries=3)
+                stats["deleted"] += 1
+                write_log(f"Moved to Drive trash for removed source: {path}")
+            cache.pop(str(path), None)
+        except HttpError as exc:
+            if exc.resp.status == 404:
+                cache.pop(str(path), None)
+            else:
+                stats["errors"] += 1
+                write_log(f"ERROR removing {path}: {exc}")
+                break
+        except Exception as exc:
+            stats["errors"] += 1
+            write_log(f"ERROR removing {path}: {exc}")
+            break
+        finally:
+            emit("deletion_progress", checked=checked, total=len(candidates), deleted=stats["deleted"])
+
+
 def run_backup():
     cfg = load_env()
-    stats = {"created": 0, "updated": 0, "skipped": 0, "errors": 0, "total": 0}
+    stats = {"created": 0, "updated": 0, "skipped": 0, "errors": 0, "total": 0, "deleted": 0}
     t0 = time.time()
     write_log("Backup started")
 
@@ -435,7 +508,7 @@ def run_backup():
     skipped_unchanged = 0
     last_check_emit = 0.0
     for checked, p in enumerate(files, 1):
-        if unchanged(p, cache):
+        if unchanged(p, cache) and (not cfg["DELETE_REMOVED"] or cache[str(p)].get("drive_id")):
             skipped_unchanged += 1
         else:
             changed_files.append(p)
@@ -527,6 +600,9 @@ def run_backup():
                     elapsed=int(time.time() - t0),
                 )
 
+    if cfg["DELETE_REMOVED"] and not stats["errors"]:
+        emit("status", message="Moving removed files to Drive trash...")
+        trash_removed_files(service, cfg, cache, stats, files)
     save_cache(cache, cache_destination)
     with _stats_lock:
         final_stats = dict(stats)
