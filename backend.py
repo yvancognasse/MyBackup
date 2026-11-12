@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import mimetypes
+import hashlib
 import traceback
 import time
 import threading
@@ -191,7 +192,7 @@ def get_or_create_folder(service, name, parent_id=None):
             f"name='{safe_name}' and mimeType='application/vnd.google-apps.folder' "
             f"and trashed=false and '{effective_parent}' in parents"
         )
-        results = service.files().list(q=query, fields="files(id,name)", pageSize=10).execute()
+        results = service.files().list(q=query, fields="files(id,name)", pageSize=10).execute(num_retries=3)
         files = results.get("files", [])
         if files:
             return files[0]["id"], False
@@ -205,12 +206,12 @@ def list_folder(service, folder_id):
     while True:
         kwargs = {
             "q": f"'{folder_id}' in parents and trashed=false",
-            "fields": "nextPageToken, files(id,name,size,modifiedTime,mimeType)",
+            "fields": "nextPageToken, files(id,name,size,modifiedTime,mimeType,sha256Checksum)",
             "pageSize": 1000,
         }
         if page_token:
             kwargs["pageToken"] = page_token
-        resp = service.files().list(**kwargs).execute()
+        resp = service.files().list(**kwargs).execute(num_retries=3)
         for item in resp.get("files", []):
             out[item["name"]] = item
         page_token = resp.get("nextPageToken")
@@ -228,9 +229,36 @@ def unchanged(path, cache):
     try:
         with _cache_lock:
             cached = cache.get(str(path))
-        return cached == signature(path)
+        if not isinstance(cached, dict) or not cached.get("sha256"):
+            # Old metadata alone cannot prove equality after a remount or sync.
+            # The upload worker will compare the content with Drive once.
+            return False
+        current = signature(path)
+        if all(cached.get(k) == v for k, v in current.items()):
+            return True
+        verified = content_signature(path)
+        if verified["sha256"] != cached["sha256"]:
+            return False
+        with _cache_lock:
+            cache[str(path)] = verified
+        return True
     except OSError:
         return False
+
+
+def content_signature(path):
+    # Opening an online-only file may hydrate it and change its metadata.
+    # Retry once, but never associate a digest with an unstable file snapshot.
+    for _ in range(2):
+        before = signature(path)
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        after = signature(path)
+        if before == after:
+            return {**after, "sha256": digest.hexdigest()}
+    raise OSError("File changed during verification; it will be retried on the next backup")
 
 
 def upload_file(service, path, folder_id, drive_item, cfg):
@@ -346,10 +374,7 @@ def build_drive_folder_map(service, root_drive_id, source_dirs, dirs, start_time
 
 def process_one_file(path, folder_id, creds, cfg, cache, stats, folder_contents):
     try:
-        before = signature(path)
-        with _cache_lock:
-            cached = cache.get(str(path))
-        if cached == before:
+        if unchanged(path, cache):
             with _stats_lock:
                 stats["skipped"] += 1
             return "skipped"
@@ -357,9 +382,17 @@ def process_one_file(path, folder_id, creds, cfg, cache, stats, folder_contents)
         # Remove the old entry before upload so errors always leave this file retryable.
         with _cache_lock:
             cache.pop(str(path), None)
+        before = content_signature(path)
+        drive_item = folder_contents.get(path.name)
+        if drive_item and drive_item.get("sha256Checksum") == before["sha256"]:
+            with _cache_lock:
+                cache[str(path)] = before
+            with _stats_lock:
+                stats["skipped"] += 1
+            return "skipped"
         service = get_service(creds, cfg["HTTP_TIMEOUT_SECONDS"])
-        result = upload_file(service, path, folder_id, folder_contents.get(path.name), cfg)
-        if signature(path) != before:
+        result = upload_file(service, path, folder_id, drive_item, cfg)
+        if signature(path) != {k: v for k, v in before.items() if k != "sha256"}:
             raise OSError("File changed during upload; it will be retried on the next backup")
         with _cache_lock:
             cache[str(path)] = before
@@ -390,6 +423,7 @@ def run_backup():
     cache_destination = {"root_id": root_drive_id,
                    "sources": sorted(str(p.resolve()) for p in cfg["SOURCE_DIRS"])}
     cache = load_cache(cache_destination)
+    write_log(f"Cache loaded: {len(cache)} files for this destination")
 
     emit("status", message="Scanning local folders and files...")
     dirs, files = scan_tree(cfg["SOURCE_DIRS"], cfg["SKIP_HIDDEN"])
@@ -399,18 +433,27 @@ def run_backup():
     emit("status", message="Detecting changed files...")
     changed_files = []
     skipped_unchanged = 0
-    for p in files:
+    last_check_emit = 0.0
+    for checked, p in enumerate(files, 1):
         if unchanged(p, cache):
             skipped_unchanged += 1
         else:
             changed_files.append(p)
+        now = time.monotonic()
+        if checked == len(files) or now - last_check_emit >= 0.25:
+            last_check_emit = now
+            emit("check_progress", checked=checked, total=len(files),
+                 unchanged=skipped_unchanged, current=str(p))
     stats["skipped"] = skipped_unchanged
+    # Preserve verified metadata even if subsequent network preparation fails.
+    save_cache(cache, cache_destination)
+    write_log(f"Local check: {len(files)} files, {skipped_unchanged} unchanged, "
+              f"{len(changed_files)} to verify on Drive; {time.time() - t0:.1f}s elapsed")
     needed_dirs = required_dirs_for_files(changed_files, cfg["SOURCE_DIRS"], dirs)
 
     emit("status", message="Preparing Drive folders...")
     folder_map = build_drive_folder_map(service, root_drive_id, cfg["SOURCE_DIRS"], needed_dirs, t0)
 
-    emit("status", message="Backing up files...")
     roots = sorted(cfg["SOURCE_DIRS"], key=lambda p: len(str(p)), reverse=True)
     file_jobs = []
     destinations = set()
@@ -419,6 +462,8 @@ def run_backup():
         if root is None:
             continue
         folder_id = folder_map.get(str(p.parent))
+        if not folder_id:
+            raise ValueError(f"Missing Drive destination; backup is incomplete: {p.parent}")
         if folder_id:
             destination = (folder_id, p.name)
             if destination in destinations:
@@ -427,7 +472,18 @@ def run_backup():
             file_jobs.append((p, folder_id))
 
     done = 0
-    folder_contents = {folder_id: list_folder(service, folder_id) for folder_id in {fid for _, fid in file_jobs}}
+    emit("status", message="Reading Drive file checksums...")
+    folder_contents = {}
+    folder_ids = sorted({fid for _, fid in file_jobs})
+    # Each worker owns its HTTP client; httplib2 clients are not thread-safe.
+    def read_folder(folder_id):
+        return list_folder(get_service(creds, cfg["HTTP_TIMEOUT_SECONDS"]), folder_id)
+    with ThreadPoolExecutor(max_workers=cfg["MAX_WORKERS"]) as executor:
+        pending = {executor.submit(read_folder, fid): fid for fid in folder_ids}
+        for checked, future in enumerate(as_completed(pending), 1):
+            folder_contents[pending[future]] = future.result()
+            emit("drive_read_progress", checked=checked, total=len(folder_ids))
+    emit("status", message="Backing up files...")
     last_emit = 0.0
     if not file_jobs:
         emit(
@@ -483,5 +539,6 @@ if __name__ == "__main__":
         run_backup()
     except Exception:
         CRASH_FILE.write_text(traceback.format_exc(), encoding="utf-8")
+        write_log(f"Backup failed; details: {CRASH_FILE}")
         emit("error", message=str(CRASH_FILE))
         sys.exit(1)

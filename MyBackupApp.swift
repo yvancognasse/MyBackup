@@ -940,6 +940,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             "Scanning local folders and files...": "Analyse des dossiers…",
             "Detecting changed files...": "Détection des modifications…",
             "Preparing Drive folders...": "Préparation des dossiers Drive…",
+            "Reading Drive file checksums...": "Vérification des fichiers Drive…",
             "Backing up files...": "Sauvegarde des fichiers…"
         ]
         return messages[message] ?? message
@@ -958,9 +959,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             statusLabel.stringValue = localizedStatus(message)
             if message == "Preparing Drive folders..." {
                 updateStages(active: 1, completed: 1)
+            } else if message == "Reading Drive file checksums..." {
+                updateStages(active: 1, completed: 1)
+                pathLabel.stringValue = ""
+                setProgress(0, title: "Lecture des dossiers Drive")
             } else if message == "Backing up files..." {
                 updateStages(active: 2, completed: 2)
             }
+        } else if event == "check_progress" {
+            let checked = obj["checked"] as? Int ?? 0
+            let total = obj["total"] as? Int ?? 0
+            let unchanged = obj["unchanged"] as? Int ?? 0
+            pathLabel.stringValue = obj["current"] as? String ?? ""
+            detailLabel.stringValue = "\(checked)/\(total) fichiers vérifiés · \(unchanged) inchangés"
+            setProgress(total > 0 ? Double(checked) * 100 / Double(total) : 100, title: "Détection des modifications")
+        } else if event == "drive_read_progress" {
+            let checked = obj["checked"] as? Int ?? 0
+            let total = obj["total"] as? Int ?? 0
+            detailLabel.stringValue = "\(checked)/\(total) dossiers lus"
+            setProgress(total > 0 ? Double(checked) * 100 / Double(total) : 100, title: "Lecture des dossiers Drive")
         } else if event == "scan_done" {
             let folders = obj["folders"] as? Int ?? 0
             let files = obj["files"] as? Int ?? 0

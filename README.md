@@ -24,6 +24,12 @@ The cache is tied to the actual Google Drive destination and selected source roo
 
 A source folder that is missing or cannot be scanned interrupts the run with an error. Reconnect the source or correct its permissions before retrying. A file modified during upload is reported as an error and remains eligible for the next run; close applications writing that file and run the backup again. Changed source files are uploaded even when their timestamps are older than the Drive copy. No remote files are deleted by these checks.
 
+File cache entries now include a SHA-256 content digest. Matching metadata takes the fast path; a changed volume identifier, timestamp, or inode triggers a local content check. Identical content refreshes the metadata without uploading again. Content edits of the same size with a preserved modification time are detected through the change timestamp and digest. Files that change while being read are retried once, then reported as errors if still unstable.
+
+The first run after this update verifies old cache entries against Drive's SHA-256 checksums before upgrading them. This requires reading local content (and may download online-only OneDrive files) and preparing Drive folders once. Matching files are skipped; a missing or different remote checksum causes a conservative upload. Subsequent runs reuse the verified cache. Destination and source-root checks remain in force.
+
+Drive folder searches and paginated file reads retry transient failures up to three times. File listings run in parallel using separate HTTP clients. The interface shows local verification and Drive listing progress; the log records cache size, local verification totals, and fatal failures.
+
 Run the offline regression suite using the bundled Python environment:
 
 ```sh

@@ -1,12 +1,106 @@
 import tempfile
+import os
+import hashlib
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 
 import backend
 
 
 class BackendTests(unittest.TestCase):
+    def test_metadata_only_changes_reuse_verified_content(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "data"
+            path.write_bytes(b"original")
+            cache = {str(path): backend.content_signature(path)}
+            cache[str(path)]["device"] = -1
+            cache[str(path)]["ctime_ns"] = -1
+            with patch.object(backend, "content_signature", wraps=backend.content_signature) as hashed:
+                self.assertTrue(backend.unchanged(path, cache))
+                self.assertTrue(backend.unchanged(path, cache))
+                self.assertEqual(hashed.call_count, 1)
+
+    def test_same_size_edit_with_preserved_mtime_is_detected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "data"
+            path.write_bytes(b"original")
+            cache = {str(path): backend.content_signature(path)}
+            stamp = path.stat()
+            path.write_bytes(b"modified")
+            os.utime(path, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+            self.assertFalse(backend.unchanged(path, cache))
+
+    def test_legacy_cache_requires_remote_content_verification(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "data"
+            path.write_bytes(b"original")
+            cache = {str(path): backend.signature(path)}
+            self.assertFalse(backend.unchanged(path, cache))
+            stats = {"created": 0, "updated": 0, "skipped": 0, "errors": 0}
+            remote = {path.name: {"id": "remote", "sha256Checksum": hashlib.sha256(b"original").hexdigest()}}
+            with patch.object(backend, "upload_file") as upload:
+                result = backend.process_one_file(path, "folder", object(), {}, cache, stats, remote)
+            self.assertEqual(result, "skipped")
+            upload.assert_not_called()
+            self.assertTrue(backend.unchanged(path, cache))
+
+    def test_hash_failure_is_not_cached_or_uploaded(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "data"
+            path.write_bytes(b"data")
+            cache = {str(path): backend.signature(path)}
+            stats = {"created": 0, "updated": 0, "skipped": 0, "errors": 0}
+            with patch.object(backend, "content_signature", side_effect=OSError("unreadable")), patch.object(backend, "write_log"), patch.object(backend, "upload_file") as upload:
+                self.assertEqual(backend.process_one_file(path, "folder", object(), {}, cache, stats, {}), "error")
+            upload.assert_not_called()
+            self.assertNotIn(str(path), cache)
+            self.assertEqual(stats["errors"], 1)
+
+    def test_hash_rejects_file_that_keeps_changing(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "data"
+            path.write_bytes(b"data")
+            with patch.object(backend, "signature", side_effect=[{"size": n} for n in range(4)]):
+                with self.assertRaisesRegex(OSError, "changed during verification"):
+                    backend.content_signature(path)
+
+    def test_drive_reads_enable_retries_and_request_checksums(self):
+        service = Mock()
+        service.files().list().execute.return_value = {"files": []}
+        self.assertEqual(backend.list_folder(service, "folder"), {})
+        self.assertIn("sha256Checksum", service.files().list.call_args.kwargs["fields"])
+        service.files().list.return_value.execute.assert_called_with(num_retries=3)
+        service.files().create().execute.return_value = {"id": "new"}
+        backend.get_or_create_folder(service, "name")
+        service.files().list().execute.assert_called_with(num_retries=3)
+
+    def test_drive_listing_recovers_from_connection_reset(self):
+        from googleapiclient.http import HttpRequest
+        import httplib2
+        http = Mock()
+        http.request.side_effect = [ConnectionResetError("reset"),
+                                   (httplib2.Response({"status": "200"}), b'{"files": []}')]
+        request = HttpRequest(http, lambda response, content: __import__("json").loads(content), "https://example.invalid")
+        request._sleep = lambda seconds: None
+        service = Mock()
+        service.files().list.return_value = request
+        self.assertEqual(backend.list_folder(service, "folder"), {})
+        self.assertEqual(http.request.call_count, 2)
+
+    def test_remote_mismatch_or_missing_checksum_uploads_conservatively(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "data"
+            path.write_bytes(b"data")
+            for remote in ({"id": "remote"}, {"id": "remote", "sha256Checksum": "different"}):
+                with self.subTest(remote=remote):
+                    cache = {str(path): backend.signature(path)}
+                    stats = {"created": 0, "updated": 0, "skipped": 0, "errors": 0}
+                    with patch.object(backend, "get_service", return_value=object()), patch.object(backend, "upload_file", return_value="updated") as upload:
+                        self.assertEqual(backend.process_one_file(path, "folder", object(), {"HTTP_TIMEOUT_SECONDS": 1}, cache, stats, {path.name: remote}), "updated")
+                    upload.assert_called_once()
+                    self.assertTrue(backend.unchanged(path, cache))
+
     def test_scan_excludes_application_runtime(self):
         with tempfile.TemporaryDirectory() as temp:
             parent = Path(temp)
@@ -157,6 +251,42 @@ class BackendTests(unittest.TestCase):
                 config.write_text(f"SOURCE_DIRS={source}\nDRIVE_FOLDER_NAME=second\n")
                 backend.run_backup()
                 self.assertEqual(upload.call_count, 2)
+
+    def test_migration_then_remount_avoids_remote_preparation_and_uploads(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            runtime = root / "runtime"
+            runtime.mkdir()
+            source = root / "source"
+            source.mkdir()
+            path = source / "file.txt"
+            path.write_bytes(b"data")
+            config = runtime / "config"
+            config.write_text(f"SOURCE_DIRS={source}\n")
+            with (
+                patch.multiple(backend, HOME=runtime, ENV_FILE=config, CACHE_FILE=runtime / "cache.json", LOG_FILE=runtime / "run.log"),
+                patch.object(backend, "authenticate", return_value=object()),
+                patch.object(backend, "build_service", return_value=object()),
+                patch.object(backend, "get_service", return_value=object()),
+                patch.object(backend, "get_or_create_folder", return_value=("remote", False)) as folders,
+                patch.object(backend, "list_folder", return_value={path.name: {"id": "file", "sha256Checksum": hashlib.sha256(b"data").hexdigest()}}) as listing,
+                patch.object(backend, "upload_file") as upload,
+                patch.object(backend, "emit"),
+            ):
+                destination = {"root_id": "remote", "sources": [str(source.resolve())]}
+                backend.save_cache({str(path): backend.signature(path)}, destination)
+                backend.run_backup()
+                self.assertTrue(backend.unchanged(path, backend.load_cache(destination)))
+                self.assertEqual(listing.call_count, 1)
+                folders.reset_mock()
+                real_signature = backend.signature
+                def remounted(p):
+                    return {**real_signature(p), "device": -1, "ctime_ns": -1}
+                with patch.object(backend, "signature", side_effect=remounted):
+                    backend.run_backup()
+                self.assertEqual(folders.call_count, 1)  # Only the Drive root lookup.
+                self.assertEqual(listing.call_count, 1)
+                upload.assert_not_called()
 
 
 if __name__ == "__main__":
