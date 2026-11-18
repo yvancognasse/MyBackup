@@ -160,7 +160,7 @@ PLIST
 cp "$ROOT_DIR/backend.py" "$BACKEND_PY"
 
 printf "[MyBackup] Compiling the native Swift interface...\n"
-swiftc "$SWIFT_SRC" -o "$EXECUTABLE" -framework Cocoa
+swiftc -module-cache-path "$STAGING_DIR/ModuleCache" "$SWIFT_SRC" -o "$EXECUTABLE" -framework Cocoa
 chmod +x "$EXECUTABLE"
 
 printf "[MyBackup] Creating the embedded Python venv...\n"

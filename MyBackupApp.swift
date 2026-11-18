@@ -4,12 +4,9 @@ private enum ModernStyle {
     static let beige = NSColor(calibratedRed: 0.95, green: 0.96, blue: 0.95, alpha: 1)
     static let paper = NSColor.white
     static let ink = NSColor(calibratedRed: 0.13, green: 0.16, blue: 0.15, alpha: 1)
-    static let screen = NSColor(calibratedRed: 0.91, green: 0.96, blue: 0.94, alpha: 1)
     static let phosphor = NSColor(calibratedRed: 0.09, green: 0.49, blue: 0.37, alpha: 1)
     static let dimPhosphor = NSColor(calibratedRed: 0.37, green: 0.44, blue: 0.41, alpha: 1)
-    static let amber = NSColor(calibratedRed: 0.96, green: 0.88, blue: 0.85, alpha: 1)
     static let border = NSColor(calibratedRed: 0.86, green: 0.89, blue: 0.87, alpha: 1)
-    static let accent = NSColor(calibratedRed: 0.14, green: 0.77, blue: 0.57, alpha: 1)
 
     static func font(_ size: CGFloat, weight: NSFont.Weight = .regular) -> NSFont {
         .systemFont(ofSize: size, weight: weight)
@@ -26,7 +23,11 @@ private enum ModernStyle {
     }
 }
 
-final class GradientProgressBar: NSProgressIndicator {
+final class TopAlignedView: NSView {
+    override var isFlipped: Bool { true }
+}
+
+final class BackupProgressBar: NSProgressIndicator {
     override func draw(_ dirtyRect: NSRect) {
         let track = bounds.insetBy(dx: 1, dy: 1)
         ModernStyle.border.setFill()
@@ -37,153 +38,16 @@ final class GradientProgressBar: NSProgressIndicator {
             let path = NSBezierPath(roundedRect: fill, xRadius: min(7, fill.width / 2), yRadius: 7)
             NSGraphicsContext.saveGraphicsState()
             path.addClip()
-            NSGradient(colors: [ModernStyle.ink, ModernStyle.accent, NSColor(calibratedRed: 0.93, green: 0.98, blue: 0.41, alpha: 1)])?.draw(in: fill, angle: 0)
+            ModernStyle.phosphor.setFill()
+            path.fill()
             NSGraphicsContext.restoreGraphicsState()
         }
     }
 }
 
-final class RedwoodButton: NSButton {
-    private var normalColor: NSColor
-    private var hoverColor: NSColor
-    private var pressedColor: NSColor
-    private var textColor: NSColor
-    private var borderColor: NSColor
-    private let disabledColor = ModernStyle.beige
-    private let disabledBorderColor = ModernStyle.border
-    private let disabledTextColor = ModernStyle.dimPhosphor
-    private let mutedTextColor = ModernStyle.dimPhosphor
-    private var trackingAreaRef: NSTrackingArea?
-    private var hovering = false
-
-    var isMuted = false {
-        didSet {
-            if isMuted {
-                hovering = false
-            }
-            refreshColor()
-        }
-    }
-
-    override var title: String {
-        didSet {
-            refreshColor()
-        }
-    }
-
-    override var isEnabled: Bool {
-        didSet {
-            refreshColor()
-        }
-    }
-
-    init(title: String, target: AnyObject?, action: Selector?, normal: NSColor, hover: NSColor, pressed: NSColor, text: NSColor, border: NSColor) {
-        self.normalColor = normal
-        self.hoverColor = hover
-        self.pressedColor = pressed
-        self.textColor = text
-        self.borderColor = border
-        super.init(frame: .zero)
-        self.title = title
-        self.target = target
-        self.action = action
-        self.isBordered = false
-        self.wantsLayer = true
-        self.font = ModernStyle.font(12, weight: .bold)
-        self.contentTintColor = text
-        self.layer?.cornerRadius = 12
-        self.layer?.borderWidth = 1
-        self.layer?.borderColor = border.cgColor
-        refreshColor()
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let trackingAreaRef {
-            removeTrackingArea(trackingAreaRef)
-        }
-        let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways], owner: self, userInfo: nil)
-        trackingAreaRef = area
-        addTrackingArea(area)
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        if !isEnabled || isMuted { return }
-        hovering = true
-        updateColor(hoverColor)
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        if !isEnabled || isMuted { return }
-        hovering = false
-        updateColor(normalColor)
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        if !isEnabled || isMuted { return }
-        updateColor(pressedColor)
-        super.mouseDown(with: event)
-        refreshColor()
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        // Draw the title explicitly so AppKit does not dim its disabled color.
-        let size = attributedTitle.size()
-        attributedTitle.draw(at: NSPoint(x: (bounds.width - size.width) / 2,
-                                         y: (bounds.height - size.height) / 2))
-    }
-
-    func configureColors(normal: NSColor, hover: NSColor, pressed: NSColor, text: NSColor, border: NSColor) {
-        self.normalColor = normal
-        self.hoverColor = hover
-        self.pressedColor = pressed
-        self.textColor = text
-        self.borderColor = border
-        refreshColor()
-    }
-
-    private func refreshColor() {
-        if isMuted {
-            contentTintColor = mutedTextColor
-            setTitleColor(mutedTextColor)
-            layer?.backgroundColor = disabledColor.cgColor
-            layer?.borderColor = disabledBorderColor.cgColor
-        } else if isEnabled {
-            contentTintColor = textColor
-            setTitleColor(textColor)
-            updateColor(hovering ? hoverColor : normalColor)
-        } else {
-            contentTintColor = textColor
-            setTitleColor(textColor)
-            layer?.backgroundColor = normalColor.cgColor
-            layer?.borderColor = borderColor.cgColor
-        }
-        needsDisplay = true
-    }
-
-    private func setTitleColor(_ color: NSColor) {
-        attributedTitle = NSAttributedString(
-            string: title,
-            attributes: [
-                .foregroundColor: color,
-                .font: font ?? ModernStyle.font(12, weight: .bold)
-            ]
-        )
-    }
-
-    private func updateColor(_ color: NSColor) {
-        layer?.backgroundColor = color.cgColor
-        layer?.borderColor = borderColor.cgColor
-    }
-}
-
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var window: NSWindow!
-    var progressBar: GradientProgressBar!
+    var progressBar: BackupProgressBar!
     var statusLabel: NSTextField!
     var pathLabel: NSTextField!
     var detailLabel: NSTextField!
@@ -191,6 +55,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var progressPercentLabel: NSTextField!
     var stageIcons: [NSTextField] = []
     var stageStates: [NSTextField] = []
+    var metrics: [NSTextField] = []
+    var elapsedLabel: NSTextField!
+    var sourcesLabel: NSTextField!
+    var destinationLabel: NSTextField!
+    var retentionLabel: NSTextField!
+    var detailsStack: NSStackView!
+    var workspace: NSStackView!
+    var mainCard: NSView!
+    var sidePanel: NSStackView!
+    var sideWidth: NSLayoutConstraint!
+    var compactConstraints: [NSLayoutConstraint] = []
+    var compactLayout: Bool?
     var completedStages = 0
     var activeStage: Int?
     var startButton: NSButton!
@@ -413,142 +289,72 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return sourceFolders(from: value).joined(separator: "|")
     }
 
-    func setupTextField(_ key: String, y: CGFloat, parent: NSView, width: CGFloat = 440, height: CGFloat = 26, labelX: CGFloat = 28, fieldX: CGFloat = 205, labelWidth: CGFloat = 155) {
-        let names: [String: String] = [
-            "SOURCE_DIRS": "Dossiers source",
-            "DRIVE_FOLDER_NAME": "Dossier Drive",
-            "MAX_WORKERS": "Transferts parallèles",
-            "UPLOAD_CHUNK_MB": "Bloc d’envoi (Mo)",
-            "SMALL_FILE_LIMIT_MB": "Petit fichier (Mo)",
-            "MAX_RETRIES": "Tentatives",
-            "RETRY_DELAY_SECONDS": "Délai reprise (s)",
-            "HTTP_TIMEOUT_SECONDS": "Délai réseau (s)",
-            "CACHE_SAVE_EVERY": "Cache / fichiers"
-        ]
-        let title = label(names[key] ?? key, size: 12, weight: .medium, color: ModernStyle.ink)
-        title.frame = NSRect(x: labelX, y: y + max(5, (height - 22) / 2), width: labelWidth, height: 22)
-        parent.addSubview(title)
-
-        let initialValue = key == "SOURCE_DIRS" ? sourceFoldersDisplayValue(setupValue(key)) : setupValue(key)
-        let field = NSTextField(string: initialValue)
-        field.font = ModernStyle.font(12)
-        field.backgroundColor = ModernStyle.paper
-        field.textColor = ModernStyle.ink
-        field.frame = NSRect(x: fieldX, y: y, width: width, height: height)
-        if key == "SOURCE_DIRS" {
-            field.usesSingleLineMode = false
-            field.lineBreakMode = .byWordWrapping
-            field.cell?.wraps = true
-            field.cell?.isScrollable = false
-        }
-        parent.addSubview(field)
-        setupFields[key] = field
-    }
-
-    func addInfoButton(_ key: String, x: CGFloat, y: CGFloat, parent: NSView) {
-        let button = NSButton(title: "i", target: self, action: #selector(showParameterHelp))
-        button.identifier = NSUserInterfaceItemIdentifier(key)
-        button.bezelStyle = .regularSquare
-        button.font = ModernStyle.font(11, weight: .bold)
-        button.frame = NSRect(x: x, y: y + 1, width: 22, height: 22)
-        parent.addSubview(button)
-    }
-
-    @objc func showParameterHelp(_ sender: NSButton) {
-        guard let key = sender.identifier?.rawValue else { return }
-        let titles: [String: String] = [
-            "MAX_WORKERS": "Transferts parallèles",
-            "UPLOAD_CHUNK_MB": "Bloc d’envoi",
-            "SMALL_FILE_LIMIT_MB": "Petit fichier",
-            "MAX_RETRIES": "Tentatives",
-            "RETRY_DELAY_SECONDS": "Délai de reprise",
-            "HTTP_TIMEOUT_SECONDS": "Délai réseau",
-            "CACHE_SAVE_EVERY": "Fréquence du cache"
-        ]
-        let messages: [String: String] = [
-            "MAX_WORKERS": "Nombre maximal de fichiers traités simultanément. Une valeur trop élevée peut ralentir Drive.",
-            "UPLOAD_CHUNK_MB": "Taille des blocs utilisés pour les fichiers volumineux.",
-            "SMALL_FILE_LIMIT_MB": "Au-dessous de ce seuil, le fichier est envoyé en une seule requête.",
-            "MAX_RETRIES": "Nombre d’essais avant de signaler un échec de transfert.",
-            "RETRY_DELAY_SECONDS": "Attente de base entre deux essais, augmentée à chaque nouvel essai.",
-            "HTTP_TIMEOUT_SECONDS": "Durée maximale d’une requête vers Google Drive.",
-            "CACHE_SAVE_EVERY": "Nombre de fichiers traités entre deux écritures du cache local."
-        ]
-        let alert = NSAlert()
-        alert.messageText = titles[key] ?? key
-        alert.informativeText = messages[key] ?? ""
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "OK")
-        alert.runModal()
-    }
-
     @objc func showSetup() {
         if let existingSetupWindow = setupWindow {
             existingSetupWindow.makeKeyAndOrderFront(nil)
             return
         }
 
-        let panel = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 820, height: 420),
-            styleMask: [.titled, .closable],
-            backing: .buffered,
-            defer: false
-        )
+        let panel = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 560),
+                             styleMask: [.titled, .closable], backing: .buffered, defer: false)
         panel.title = "Réglages MyBackup"
         panel.center()
         panel.isReleasedWhenClosed = false
         panel.backgroundColor = ModernStyle.beige
+        panel.appearance = NSAppearance(named: .aqua)
         panel.delegate = self
-
-        let content = NSView(frame: panel.contentView!.bounds)
-        content.autoresizingMask = [.width, .height]
-        panel.contentView = content
         setupFields = [:]
-
-        let title = label("Réglages MyBackup", size: 23, weight: .semibold, color: ModernStyle.ink)
-        title.frame = NSRect(x: 30, y: 844, width: 762, height: 29)
-        content.addSubview(title)
-        let hint = label("Choisissez les dossiers à sauvegarder et le traitement des fichiers supprimés.", size: 12, color: ModernStyle.dimPhosphor)
-        hint.frame = NSRect(x: 31, y: 820, width: 761, height: 19)
-        content.addSubview(hint)
-
-        let sourcesHeading = label("Dossiers à sauvegarder", size: 12, weight: .bold, color: ModernStyle.ink)
-        sourcesHeading.frame = NSRect(x: 30, y: 770, width: 250, height: 20)
-        content.addSubview(sourcesHeading)
-        content.addSubview(ModernStyle.box(NSRect(x: 28, y: 559, width: 764, height: 204), fill: ModernStyle.paper))
-
-        setupTextField("SOURCE_DIRS", y: 674, parent: content, width: 470, height: 58, labelX: 48, fieldX: 210, labelWidth: 155)
-        let chooseButton = NSButton(title: "Ajouter", target: self, action: #selector(chooseSourceFolder))
-        chooseButton.frame = NSRect(x: 691, y: 695, width: 85, height: 29)
-        chooseButton.bezelStyle = .regularSquare
-        chooseButton.font = ModernStyle.font(11, weight: .bold)
-        content.addSubview(chooseButton)
-
-        setupTextField("DRIVE_FOLDER_NAME", y: 628, parent: content, width: 470, height: 29, labelX: 48, fieldX: 210, labelWidth: 155)
+        let content = panel.contentView!
+        let sourcesTitle = label("Dossiers à sauvegarder", size: 14, weight: .semibold, color: ModernStyle.ink)
+        let sources = NSTextField(string: sourceFoldersDisplayValue(setupValue("SOURCE_DIRS")))
+        sources.font = ModernStyle.font(13)
+        sources.usesSingleLineMode = false
+        sources.lineBreakMode = .byWordWrapping
+        sources.cell?.wraps = true
+        sources.cell?.isScrollable = false
+        sources.heightAnchor.constraint(equalToConstant: 76).isActive = true
+        sources.setAccessibilityLabel("Dossiers à sauvegarder, un chemin par ligne")
+        setupFields["SOURCE_DIRS"] = sources
+        let add = NSButton(title: "Ajouter un dossier…", target: self, action: #selector(chooseSourceFolder))
+        add.bezelStyle = .rounded
+        let sourceBody = stack([sourcesTitle, sources, label("Un chemin par ligne. Le bouton Ajouter ouvre le Finder.", size: 12, color: ModernStyle.dimPhosphor), add], spacing: 10)
+        fillWidth(sources, in: sourceBody)
+        let destinationTitle = label("Dossier de destination dans Google Drive", size: 14, weight: .semibold, color: ModernStyle.ink)
+        let destination = NSTextField(string: setupValue("DRIVE_FOLDER_NAME"))
+        destination.font = ModernStyle.font(13)
+        destination.setAccessibilityLabel("Nom du dossier de destination dans Google Drive")
+        setupFields["DRIVE_FOLDER_NAME"] = destination
         let skip = NSButton(checkboxWithTitle: "Ignorer les fichiers cachés", target: nil, action: nil)
-        skip.frame = NSRect(x: 205, y: 596, width: 400, height: 27)
-        skip.font = ModernStyle.font(12)
         skip.state = setupValue("SKIP_HIDDEN").lowercased() == "true" ? .on : .off
         skipHiddenCheckbox = skip
-        content.addSubview(skip)
         let keep = NSButton(checkboxWithTitle: "Conserver dans Drive les fichiers supprimés de la source", target: nil, action: nil)
-        keep.frame = NSRect(x: 205, y: 568, width: 570, height: 27)
-        keep.font = ModernStyle.font(12)
         keep.state = setupValue("DELETE_REMOVED").lowercased() == "true" ? .off : .on
-        keep.toolTip = "Si décoché, les fichiers suivis par MyBackup et supprimés de la source sont placés dans la corbeille Drive après une sauvegarde sans erreur. Les dossiers sont conservés."
         keepRemovedCheckbox = keep
-        content.addSubview(keep)
-
-        for view in content.subviews {
-            view.frame.origin.y -= 490
-        }
-
-        let cancel = secondaryButton("Annuler", action: #selector(closeSetup))
-        cancel.frame = NSRect(x: 555, y: 18, width: 105, height: 34)
-        content.addSubview(cancel)
-        let save = primaryButton("Enregistrer", action: #selector(saveSetup))
-        save.frame = NSRect(x: 672, y: 18, width: 120, height: 34)
-        content.addSubview(save)
+        let explanation = label("Si cette option est décochée, les copies suivies sont mises à la corbeille Drive après une sauvegarde sans erreur. Les dossiers sont conservés.", size: 12, color: ModernStyle.dimPhosphor)
+        explanation.maximumNumberOfLines = 3
+        explanation.lineBreakMode = .byWordWrapping
+        let options = stack([destinationTitle, destination, skip, keep, explanation], spacing: 12)
+        fillWidth(destination, in: options)
+        fillWidth(explanation, in: options)
+        let cancel = NSButton(title: "Annuler", target: self, action: #selector(closeSetup))
+        cancel.bezelStyle = .rounded
+        cancel.keyEquivalent = "\u{1b}"
+        let save = NSButton(title: "Enregistrer", target: self, action: #selector(saveSetup))
+        save.bezelStyle = .rounded
+        save.keyEquivalent = "\r"
+        let flexible = NSView()
+        flexible.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let actions = stack([flexible, cancel, save], horizontal: true, spacing: 12)
+        let root = stack([card(sourceBody), card(options), actions], spacing: 18)
+        root.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(root)
+        root.arrangedSubviews.forEach { fillWidth($0, in: root) }
+        NSLayoutConstraint.activate([
+            root.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24),
+            root.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24),
+            root.topAnchor.constraint(equalTo: content.topAnchor, constant: 24),
+            root.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -24)
+        ])
 
         setupWindow = panel
         panel.makeKeyAndOrderFront(nil)
@@ -583,6 +389,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         defaults.set(true, forKey: "RETENTION_CHOICE_SAVED")
         defaults.set(true, forKey: "SETUP_IMPORTED")
         defaults.synchronize()
+        refreshLocation()
         closeSetup()
     }
 
@@ -598,10 +405,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return true
     }
 
-    func color(_ red: CGFloat, _ green: CGFloat, _ blue: CGFloat, _ alpha: CGFloat = 1.0) -> NSColor {
-        return NSColor(calibratedRed: red / 255.0, green: green / 255.0, blue: blue / 255.0, alpha: alpha)
-    }
-
     func label(_ text: String, size: CGFloat, weight: NSFont.Weight = .regular, color: NSColor, alignment: NSTextAlignment = .left) -> NSTextField {
         let field = NSTextField(labelWithString: text)
         field.font = ModernStyle.font(size, weight: weight)
@@ -614,142 +417,218 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return field
     }
 
-    func primaryButton(_ title: String, action: Selector) -> NSButton {
-        return RedwoodButton(
-            title: title,
-            target: self,
-            action: action,
-            normal: ModernStyle.ink,
-            hover: NSColor(calibratedRed: 0.23, green: 0.29, blue: 0.27, alpha: 1),
-            pressed: ModernStyle.phosphor,
-            text: ModernStyle.paper,
-            border: ModernStyle.ink
-        )
+    // Auto Layout keeps the same hierarchy in the compact and wide layouts.
+    func stack(_ views: [NSView], horizontal: Bool = false, spacing: CGFloat = 16) -> NSStackView {
+        let result = NSStackView(views: views)
+        result.orientation = horizontal ? .horizontal : .vertical
+        result.alignment = horizontal ? .centerY : .leading
+        result.spacing = spacing
+        return result
     }
 
-    func secondaryButton(_ title: String, action: Selector) -> NSButton {
-        return RedwoodButton(
-            title: title,
-            target: self,
-            action: action,
-            normal: ModernStyle.paper,
-            hover: ModernStyle.beige,
-            pressed: ModernStyle.border,
-            text: ModernStyle.ink,
-            border: ModernStyle.border
-        )
+    func fillWidth(_ view: NSView, in parent: NSView) {
+        view.translatesAutoresizingMaskIntoConstraints = false
+        view.widthAnchor.constraint(equalTo: parent.widthAnchor).isActive = true
     }
 
-    func dangerButton(_ title: String, action: Selector) -> NSButton {
-        return RedwoodButton(
-            title: title,
-            target: self,
-            action: action,
-            normal: ModernStyle.paper,
-            hover: ModernStyle.amber,
-            pressed: ModernStyle.amber.withAlphaComponent(0.8),
-            text: ModernStyle.ink,
-            border: ModernStyle.border
-        )
+    func card(_ body: NSStackView) -> NSView {
+        let box = ModernStyle.box(.zero, fill: ModernStyle.paper)
+        box.translatesAutoresizingMaskIntoConstraints = false
+        body.translatesAutoresizingMaskIntoConstraints = false
+        box.contentView!.addSubview(body)
+        NSLayoutConstraint.activate([
+            body.leadingAnchor.constraint(equalTo: box.contentView!.leadingAnchor, constant: 22),
+            body.trailingAnchor.constraint(equalTo: box.contentView!.trailingAnchor, constant: -22),
+            body.topAnchor.constraint(equalTo: box.contentView!.topAnchor, constant: 22),
+            body.bottomAnchor.constraint(equalTo: box.contentView!.bottomAnchor, constant: -22)
+        ])
+        return box
+    }
+
+    func separator() -> NSBox {
+        let line = NSBox()
+        line.boxType = .separator
+        return line
     }
 
     func buildWindow() {
-        window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 645, height: 480),
-            styleMask: [.titled, .closable, .miniaturizable],
-            backing: .buffered,
-            defer: false
-        )
-        window.center()
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1060, height: 760),
+                          styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.title = "MyBackup"
-        window.minSize = NSSize(width: 645, height: 480)
+        window.minSize = NSSize(width: 640, height: 600)
         window.backgroundColor = ModernStyle.beige
+        window.appearance = NSAppearance(named: .aqua)
         window.delegate = self
-        window.standardWindowButton(.closeButton)?.target = self
-        window.standardWindowButton(.closeButton)?.action = #selector(quit)
-
-        let content = NSView(frame: window.contentView!.bounds)
-        content.autoresizingMask = [.width, .height]
-        window.contentView = content
-
-        let title = label("MyBackup", size: 23, weight: .semibold, color: ModernStyle.ink)
-        title.frame = NSRect(x: 30, y: 430, width: 360, height: 29)
-        content.addSubview(title)
-        let subtitle = label("Sauvegarde des fichiers vers Google Drive", size: 12, color: ModernStyle.dimPhosphor)
-        subtitle.frame = NSRect(x: 31, y: 406, width: 380, height: 19)
-        content.addSubview(subtitle)
+        window.center()
+        let content = window.contentView!
+        let scroll = NSScrollView()
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        content.addSubview(scroll)
+        NSLayoutConstraint.activate([
+            scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            scroll.topAnchor.constraint(equalTo: content.topAnchor),
+            scroll.bottomAnchor.constraint(equalTo: content.bottomAnchor)
+        ])
+        let document = TopAlignedView()
+        document.translatesAutoresizingMaskIntoConstraints = false
+        scroll.documentView = document
+        let title = label("MyBackup", size: 25, weight: .semibold, color: ModernStyle.ink)
+        let subtitle = label("Vos dossiers, sauvegardés sur Google Drive.", size: 13, color: ModernStyle.dimPhosphor)
+        let heading = stack([title, subtitle], spacing: 4)
         let settings = NSButton(title: "Réglages", target: self, action: #selector(showSetup))
-        settings.frame = NSRect(x: 520, y: 426, width: 101, height: 31)
         settings.bezelStyle = .rounded
-        settings.font = ModernStyle.font(12, weight: .medium)
-        settings.toolTip = "Réglages"
-        content.addSubview(settings)
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let header = stack([heading, spacer, settings], horizontal: true)
 
-        statusLabel = label("Prêt à sauvegarder", size: 19, weight: .semibold, color: ModernStyle.ink)
-        statusLabel.frame = NSRect(x: 44, y: 357, width: 553, height: 27)
-        content.addSubview(statusLabel)
-        detailLabel = label("Vos fichiers seront copiés vers Google Drive.", size: 12, color: ModernStyle.dimPhosphor)
-        detailLabel.frame = NSRect(x: 44, y: 333, width: 553, height: 20)
-        content.addSubview(detailLabel)
-        pathLabel = label("", size: 11, color: ModernStyle.dimPhosphor)
-        pathLabel.lineBreakMode = .byTruncatingMiddle
-        pathLabel.frame = NSRect(x: 44, y: 310, width: 553, height: 18)
-        content.addSubview(pathLabel)
-        progressTitleLabel = label("Progression", size: 11, weight: .medium, color: ModernStyle.dimPhosphor)
-        progressTitleLabel.frame = NSRect(x: 44, y: 282, width: 250, height: 18)
-        content.addSubview(progressTitleLabel)
-        progressPercentLabel = label("—", size: 12, weight: .semibold, color: ModernStyle.ink, alignment: .right)
-        progressPercentLabel.frame = NSRect(x: 510, y: 282, width: 87, height: 18)
-        content.addSubview(progressPercentLabel)
-        progressBar = GradientProgressBar(frame: NSRect(x: 44, y: 260, width: 553, height: 14))
+        statusLabel = label("Prêt à sauvegarder", size: 25, weight: .semibold, color: ModernStyle.ink)
+        statusLabel.maximumNumberOfLines = 2
+        statusLabel.lineBreakMode = .byWordWrapping
+        statusLabel.setAccessibilityRole(.staticText)
+        detailLabel = label("Lancez la sauvegarde de vos dossiers vers Google Drive.", size: 13, color: ModernStyle.dimPhosphor)
+        detailLabel.lineBreakMode = .byWordWrapping
+        detailLabel.maximumNumberOfLines = 3
+        progressPercentLabel = label("—", size: 48, weight: .semibold, color: ModernStyle.ink)
+        progressTitleLabel = label("En attente du démarrage", size: 13, color: ModernStyle.dimPhosphor)
+        progressBar = BackupProgressBar()
         progressBar.minValue = 0
         progressBar.maxValue = 100
-        progressBar.doubleValue = 0
         progressBar.isIndeterminate = false
-        content.addSubview(progressBar)
+        progressBar.setAccessibilityLabel("Progression de l’étape actuelle")
+        progressBar.heightAnchor.constraint(equalToConstant: 10).isActive = true
+        metrics = []
+        let metricViews = ["Créés", "Mis à jour", "Inchangés", "Erreurs"].map { name -> NSView in
+            let value = label("—", size: 23, weight: .semibold, color: ModernStyle.ink)
+            value.setAccessibilityLabel(name)
+            metrics.append(value)
+            return stack([value, label(name, size: 12, color: ModernStyle.dimPhosphor)], spacing: 5)
+        }
+        let metricRow = stack(metricViews, horizontal: true)
+        metricRow.distribution = .fillEqually
+        elapsedLabel = label("Temps écoulé : —", size: 13, color: ModernStyle.dimPhosphor)
+        let body = stack([statusLabel, detailLabel, progressPercentLabel, progressTitleLabel, progressBar, metricRow, separator(), elapsedLabel], spacing: 18)
+        for view in [statusLabel!, detailLabel!, progressBar!, metricRow, body.arrangedSubviews[6]] { fillWidth(view, in: body) }
+        mainCard = card(body)
 
-        content.addSubview(ModernStyle.box(NSRect(x: 24, y: 40, width: 597, height: 203), fill: ModernStyle.paper))
-        let stagesTitle = label("Étapes de la sauvegarde", size: 14, weight: .semibold, color: ModernStyle.ink)
-        stagesTitle.frame = NSRect(x: 45, y: 210, width: 390, height: 21)
-        content.addSubview(stagesTitle)
-        let stageNames = ["Analyser les dossiers", "Préparer Google Drive", "Sauvegarder les fichiers"]
         stageIcons = []
         stageStates = []
-        for (index, name) in stageNames.enumerated() {
-            let y = CGFloat(174 - index * 32)
-            let icon = label("○", size: 18, weight: .medium, color: ModernStyle.dimPhosphor, alignment: .center)
-            icon.frame = NSRect(x: 45, y: y - 1, width: 25, height: 24)
-            content.addSubview(icon)
+        let stages = stack([label("Parcours de sauvegarde", size: 15, weight: .semibold, color: ModernStyle.ink)], spacing: 20)
+        for name in ["Analyse des dossiers", "Préparation de Drive", "Sauvegarde des fichiers"] {
+            let icon = label("○", size: 19, color: ModernStyle.dimPhosphor)
+            icon.widthAnchor.constraint(equalToConstant: 24).isActive = true
+            icon.setAccessibilityElement(false)
+            let state = label("À venir", size: 12, color: ModernStyle.dimPhosphor)
+            let row = stack([icon, stack([label(name, size: 13, weight: .medium, color: ModernStyle.ink), state], spacing: 4)], horizontal: true, spacing: 10)
+            stages.addArrangedSubview(row)
             stageIcons.append(icon)
-            let stageName = label(name, size: 12, weight: .medium, color: ModernStyle.ink)
-            stageName.frame = NSRect(x: 80, y: y, width: 365, height: 20)
-            content.addSubview(stageName)
-            let state = label("À venir", size: 11, color: ModernStyle.dimPhosphor, alignment: .right)
-            state.frame = NSRect(x: 484, y: y, width: 113, height: 20)
-            content.addSubview(state)
             stageStates.append(state)
         }
+        sourcesLabel = label("", size: 13, color: ModernStyle.ink)
+        sourcesLabel.maximumNumberOfLines = 3
+        sourcesLabel.lineBreakMode = .byWordWrapping
+        destinationLabel = label("", size: 13, weight: .medium, color: ModernStyle.ink)
+        destinationLabel.lineBreakMode = .byTruncatingMiddle
+        destinationLabel.isSelectable = true
+        let location = stack([label("Emplacement", size: 15, weight: .semibold, color: ModernStyle.ink), sourcesLabel, separator(), label("Vers Google Drive", size: 12, color: ModernStyle.dimPhosphor), destinationLabel], spacing: 12)
+        for view in [sourcesLabel!, destinationLabel!, location.arrangedSubviews[2]] { fillWidth(view, in: location) }
+        sidePanel = stack([card(stages), card(location)], spacing: 16)
+        sidePanel.translatesAutoresizingMaskIntoConstraints = false
+        sidePanel.arrangedSubviews.forEach { fillWidth($0, in: sidePanel) }
+        sideWidth = sidePanel.widthAnchor.constraint(equalToConstant: 300)
+        sideWidth.isActive = true
+        workspace = stack([mainCard, sidePanel], horizontal: true, spacing: 18)
+        workspace.distribution = .fill
+        workspace.alignment = .top
+        mainCard.widthAnchor.constraint(greaterThanOrEqualToConstant: 300).isActive = true
 
-        startButton = primaryButton("Lancer la sauvegarde", action: #selector(startBackup))
-        startButton.frame = NSRect(x: 44, y: 54, width: 382, height: 40)
-        content.addSubview(startButton)
-        stopButton = secondaryButton("Fermer", action: #selector(quit))
-        stopButton.frame = NSRect(x: 438, y: 54, width: 159, height: 40)
-        content.addSubview(stopButton)
+        let details = NSButton(checkboxWithTitle: "Afficher les détails", target: self, action: #selector(toggleDetails(_:)))
+        details.setButtonType(.switch)
+        pathLabel = label("Aucun détail pour le moment.", size: 12, color: ModernStyle.dimPhosphor)
+        pathLabel.lineBreakMode = .byTruncatingMiddle
+        pathLabel.isSelectable = true
+        let logs = NSButton(title: "Ouvrir les journaux", target: self, action: #selector(openLog))
+        logs.bezelStyle = .rounded
+        detailsStack = stack([pathLabel, logs], spacing: 8)
+        fillWidth(pathLabel, in: detailsStack)
+        detailsStack.isHidden = true
+        startButton = NSButton(title: "Sauvegarder maintenant", target: self, action: #selector(startBackup))
+        startButton.bezelStyle = .rounded
+        startButton.keyEquivalent = "\r"
+        startButton.bezelColor = ModernStyle.phosphor
+        startButton.contentTintColor = .white
+        stopButton = NSButton(title: "Arrêter la sauvegarde", target: self, action: #selector(stopBackup))
+        stopButton.bezelStyle = .rounded
+        stopButton.isHidden = true
+        let actionSpacer = NSView()
+        actionSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let actions = stack([details, actionSpacer, startButton, stopButton], horizontal: true, spacing: 12)
+        retentionLabel = label("", size: 12, color: ModernStyle.dimPhosphor)
+        retentionLabel.maximumNumberOfLines = 3
+        retentionLabel.lineBreakMode = .byWordWrapping
+        let root = stack([header, workspace, actions, detailsStack, separator(), retentionLabel], spacing: 24)
+        root.translatesAutoresizingMaskIntoConstraints = false
+        document.addSubview(root)
+        root.arrangedSubviews.forEach { fillWidth($0, in: root) }
+        NSLayoutConstraint.activate([
+            document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
+            root.leadingAnchor.constraint(equalTo: document.leadingAnchor, constant: 28),
+            root.trailingAnchor.constraint(equalTo: document.trailingAnchor, constant: -28),
+            root.topAnchor.constraint(equalTo: document.topAnchor, constant: 28),
+            root.bottomAnchor.constraint(equalTo: document.bottomAnchor, constant: -28)
+        ])
+        refreshLocation()
+        windowDidResize(Notification(name: NSWindow.didResizeNotification, object: window))
+    }
 
-        let footer = label("Dossiers locaux  →  Google Drive", size: 10, color: ModernStyle.dimPhosphor)
-        footer.frame = NSRect(x: 30, y: 8, width: 330, height: 18)
-        content.addSubview(footer)
-        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
-        let buildLabel = label("\(bundleDateText()) - Bundle \(build)", size: 10, color: ModernStyle.dimPhosphor, alignment: .right)
-        buildLabel.frame = NSRect(x: 385, y: 8, width: 236, height: 18)
-        content.addSubview(buildLabel)
+    @objc func toggleDetails(_ sender: NSButton) {
+        detailsStack.isHidden = sender.state != .on
+    }
+
+    func refreshLocation() {
+        guard sourcesLabel != nil else { return }
+        let folders = sourceFolders(from: setupValue("SOURCE_DIRS"))
+        sourcesLabel.stringValue = folders.isEmpty ? "Aucun dossier sélectionné · Ouvrez Réglages" : folders.map { URL(fileURLWithPath: $0).lastPathComponent }.joined(separator: " · ")
+        sourcesLabel.toolTip = folders.joined(separator: "\n")
+        destinationLabel.stringValue = "Mon Drive / " + setupValue("DRIVE_FOLDER_NAME")
+        destinationLabel.toolTip = destinationLabel.stringValue
+        retentionLabel.stringValue = setupValue("DELETE_REMOVED").lowercased() == "true"
+            ? "Conservation Drive : les copies suivies des fichiers supprimés sont mises à la corbeille après une sauvegarde sans erreur."
+            : "Conservation Drive : les fichiers supprimés de la source restent sauvegardés."
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        guard workspace != nil else { return }
+        let compact = window.contentView!.bounds.width < 900
+        guard compactLayout != compact else { return }
+        compactLayout = compact
+        NSLayoutConstraint.deactivate(compactConstraints)
+        compactConstraints = []
+        sideWidth.isActive = !compact
+        workspace.orientation = compact ? .vertical : .horizontal
+        workspace.alignment = compact ? .leading : .top
+        if compact {
+            compactConstraints = [mainCard!, sidePanel!].map { $0.widthAnchor.constraint(equalTo: workspace.widthAnchor) }
+            NSLayoutConstraint.activate(compactConstraints)
+        }
+    }
+
+    func updateMetrics(_ event: [String: Any]) {
+        for (index, key) in ["created", "updated", "skipped", "errors"].enumerated() {
+            metrics[index].stringValue = String(event[key] as? Int ?? 0)
+        }
+        elapsedLabel.stringValue = "Temps écoulé : " + formatDuration(event["elapsed"] as? Int ?? 0)
     }
 
     @objc func startBackup() {
         if process != nil { return }
         backupDidFinish = false
         stopRequested = false
+        metrics.forEach { $0.stringValue = "—" }
+        elapsedLabel.stringValue = "Temps écoulé : —"
         outputBuffer = ""
         setProgress(0, title: "Progression")
         completedStages = 0
@@ -834,44 +713,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func setBackupControls(isRunning: Bool) {
-        startButton.title = isRunning ? "Sauvegarde en cours" : "Lancer la sauvegarde"
-        if let startButton = startButton as? RedwoodButton {
-            startButton.isMuted = false
-        }
+        startButton.isHidden = isRunning
         startButton.isEnabled = !isRunning
-        if !isRunning {
-            showCloseButton()
-            return
-        }
-        if let stopButton = stopButton as? RedwoodButton {
-            stopButton.configureColors(
-                normal: ModernStyle.paper,
-                hover: ModernStyle.amber,
-                pressed: ModernStyle.amber.withAlphaComponent(0.8),
-                text: ModernStyle.ink,
-                border: ModernStyle.border
-            )
-        }
-        stopButton.title = "Arrêter"
+        stopButton.isHidden = !isRunning
+        stopButton.isEnabled = isRunning
+        stopButton.title = "Arrêter la sauvegarde"
         stopButton.target = self
         stopButton.action = #selector(stopBackup)
-        stopButton.isEnabled = isRunning
     }
 
     func showCloseButton() {
-        if let stopButton = stopButton as? RedwoodButton {
-            stopButton.configureColors(
-                normal: ModernStyle.paper,
-                hover: ModernStyle.beige,
-                pressed: ModernStyle.border,
-                text: ModernStyle.ink,
-                border: ModernStyle.border
-            )
-        }
-        stopButton.title = "Fermer"
-        stopButton.target = self
-        stopButton.action = #selector(quit)
-        stopButton.isEnabled = true
+        setBackupControls(isRunning: false)
     }
 
     func formatDuration(_ seconds: Int) -> String {
@@ -993,22 +845,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             setProgress(total > 0 ? Double(checked) * 100.0 / Double(total) : 0, title: "Progression des dossiers")
             detailLabel.stringValue = "\(checked)/\(total) dossiers · \(created) créés · \(formatDuration(elapsed))"
         } else if event == "upload_progress" {
+            updateMetrics(obj)
             let pct = obj["percent"] as? Double ?? Double(obj["percent"] as? Int ?? 0)
             let done = obj["done"] as? Int ?? 0
             let total = obj["total"] as? Int ?? 0
-            let created = obj["created"] as? Int ?? 0
-            let updated = obj["updated"] as? Int ?? 0
-            let skipped = obj["skipped"] as? Int ?? 0
             let errors = obj["errors"] as? Int ?? 0
-            let elapsed = obj["elapsed"] as? Int ?? 0
             statusLabel.stringValue = "Sauvegarde des fichiers…"
             updateStages(active: 2, completed: 2)
             pathLabel.stringValue = ""
             setProgress(pct, title: "Progression des fichiers")
-            detailLabel.stringValue = "\(done)/\(total) fichiers · \(created) créés · \(updated) mis à jour · \(skipped) ignorés · \(errors) erreurs · \(formatDuration(elapsed))"
+            detailLabel.stringValue = "\(done) fichiers traités sur \(total) · \(errors) erreur(s)"
         } else if event == "done" {
             let elapsed = obj["elapsed"] as? Int ?? 0
             let stats = obj["stats"] as? [String: Any] ?? [:]
+            var summary = stats
+            summary["elapsed"] = elapsed
+            updateMetrics(summary)
             let total = stats["total"] as? Int ?? 0
             let copied = stats["created"] as? Int ?? 0
             let updated = stats["updated"] as? Int ?? 0
@@ -1016,7 +868,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             let errors = stats["errors"] as? Int ?? 0
             let deleted = stats["deleted"] as? Int ?? 0
             setProgress(100, title: "Sauvegarde terminée")
-            updateStages(active: nil, completed: 3)
+            updateStages(active: errors > 0 ? 2 : nil, completed: errors > 0 ? 2 : 3, failed: errors > 0)
             statusLabel.stringValue = errors > 0 ? "Sauvegarde terminée avec erreurs" : "Sauvegarde terminée"
             pathLabel.stringValue = "\(copied) créés · \(updated) mis à jour · \(skipped) ignorés · \(deleted) à la corbeille · \(errors) erreurs"
             detailLabel.stringValue = "\(total) fichiers · \(formatDuration(elapsed))"

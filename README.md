@@ -24,6 +24,12 @@ The cache is tied to the actual Google Drive destination and selected source roo
 
 A source folder that is missing or cannot be scanned interrupts the run with an error. Reconnect the source or correct its permissions before retrying. A file modified during upload is reported as an error and remains eligible for the next run; close applications writing that file and run the backup again. Changed source files are uploaded even when their timestamps are older than the Drive copy.
 
+## Interface
+
+The native AppKit window uses a sage background, white cards and a solid green progress bar. The current phase, percentage, created/updated/unchanged/error counters and elapsed time are shown together. The progress percentage describes the current phase, rather than a global estimate. The right column shows the backup stages and configured source/destination; below 900 points it moves beneath the progress card. The window scrolls vertically when needed.
+
+**Sauvegarder maintenant** starts a run and is replaced by **Arrêter la sauvegarde** while it runs. **Afficher les détails** reveals the current path/status detail and a button to open the logs. Settings retain the existing source, destination, hidden-file and retention choices; saving refreshes the main window. Both windows use the light appearance shown in the design proposal and native controls for keyboard and accessibility support.
+
 ## Settings
 
 Settings show source folders, the Drive destination, hidden-file handling and retention. Transfer and performance options are managed internally using existing saved values or application defaults. Saving Settings preserves these internal values.
@@ -48,4 +54,4 @@ Run the offline regression suite using the bundled Python environment:
 MyBackup.app/Contents/Resources/venv/bin/python -m unittest discover -s tests -v
 ```
 
-Builds are prepared and verified in `.build` before replacing the application. The previous bundle is retained in the staging directory if a build or signing step fails.
+Builds and the Swift module cache are prepared and verified in `.build` before replacing the application. The previous bundle is retained in the staging directory if a build or signing step fails.
