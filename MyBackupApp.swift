@@ -445,6 +445,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
+        if sender === window {
+            quit()
+            return false
+        }
         if sender === setupWindow {
             sender.orderOut(nil)
             return false
