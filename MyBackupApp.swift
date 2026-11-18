@@ -9,7 +9,7 @@ private enum ModernStyle {
     static let border = NSColor(calibratedRed: 0.86, green: 0.89, blue: 0.87, alpha: 1)
 
     static func font(_ size: CGFloat, weight: NSFont.Weight = .regular) -> NSFont {
-        .systemFont(ofSize: size, weight: weight)
+        .systemFont(ofSize: max(10, (size * 0.6).rounded()), weight: weight)
     }
 
     static func box(_ frame: NSRect, fill: NSColor) -> NSBox {
@@ -18,13 +18,59 @@ private enum ModernStyle {
         box.fillColor = fill
         box.borderColor = border
         box.borderWidth = 1
-        box.cornerRadius = 16
+        box.cornerRadius = 10
         return box
     }
 }
 
 final class TopAlignedView: NSView {
     override var isFlipped: Bool { true }
+}
+
+// The document uses a frame, so changing intrinsic text widths cannot enlarge
+// the window through a constraint linking the document to the clip view.
+final class BackupScrollView: NSScrollView {
+    override func layout() {
+        super.layout()
+        guard let document = documentView, let root = document.subviews.first else { return }
+        document.setFrameSize(NSSize(width: contentSize.width, height: document.frame.height))
+        document.layoutSubtreeIfNeeded()
+        func updateWrapping(in view: NSView) {
+            if let field = view as? NSTextField, field.maximumNumberOfLines > 1,
+               field.frame.width > 0, field.preferredMaxLayoutWidth != field.frame.width {
+                field.preferredMaxLayoutWidth = field.frame.width
+                field.invalidateIntrinsicContentSize()
+            }
+            view.subviews.forEach { updateWrapping(in: $0) }
+        }
+        updateWrapping(in: root)
+        document.layoutSubtreeIfNeeded()
+        let height = max(contentSize.height, root.fittingSize.height + 32)
+        document.setFrameSize(NSSize(width: contentSize.width, height: height))
+    }
+}
+
+// AppKit can override bezelColor/contentTintColor for rounded default buttons.
+// Draw both surfaces explicitly while retaining NSButton's keyboard/AX behavior.
+final class BackupStartButton: NSButton {
+    override var intrinsicContentSize: NSSize { NSSize(width: 164, height: 30) }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let background = isHighlighted ? ModernStyle.ink : ModernStyle.phosphor
+        background.setFill()
+        NSBezierPath(roundedRect: bounds, xRadius: 7, yRadius: 7).fill()
+        let title = NSAttributedString(string: self.title, attributes: [
+            .font: ModernStyle.font(18, weight: .semibold),
+            .foregroundColor: NSColor.white
+        ])
+        let size = title.size()
+        title.draw(at: NSPoint(x: (bounds.width - size.width) / 2, y: (bounds.height - size.height) / 2))
+    }
+
+    override var focusRingMaskBounds: NSRect { bounds }
+    override func drawFocusRingMask() {
+        NSBezierPath(roundedRect: bounds, xRadius: 7, yRadius: 7).fill()
+    }
 }
 
 final class BackupProgressBar: NSProgressIndicator {
@@ -47,6 +93,7 @@ final class BackupProgressBar: NSProgressIndicator {
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var window: NSWindow!
+    var dashboardScroll: BackupScrollView!
     var progressBar: BackupProgressBar!
     var statusLabel: NSTextField!
     var pathLabel: NSTextField!
@@ -295,7 +342,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             return
         }
 
-        let panel = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 560),
+        let panel = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 430),
                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
         panel.title = "Réglages MyBackup"
         panel.center()
@@ -414,6 +461,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         field.drawsBackground = false
         field.isBordered = false
         field.isEditable = false
+        // Dynamic backend strings must shrink or wrap inside their existing column.
+        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         return field
     }
 
@@ -422,7 +471,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let result = NSStackView(views: views)
         result.orientation = horizontal ? .horizontal : .vertical
         result.alignment = horizontal ? .centerY : .leading
-        result.spacing = spacing
+        result.spacing = (spacing * 0.6).rounded()
+        for view in views {
+            if let button = view as? NSButton { button.font = ModernStyle.font(18) }
+        }
         return result
     }
 
@@ -437,10 +489,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         body.translatesAutoresizingMaskIntoConstraints = false
         box.contentView!.addSubview(body)
         NSLayoutConstraint.activate([
-            body.leadingAnchor.constraint(equalTo: box.contentView!.leadingAnchor, constant: 22),
-            body.trailingAnchor.constraint(equalTo: box.contentView!.trailingAnchor, constant: -22),
-            body.topAnchor.constraint(equalTo: box.contentView!.topAnchor, constant: 22),
-            body.bottomAnchor.constraint(equalTo: box.contentView!.bottomAnchor, constant: -22)
+            body.leadingAnchor.constraint(equalTo: box.contentView!.leadingAnchor, constant: 13),
+            body.trailingAnchor.constraint(equalTo: box.contentView!.trailingAnchor, constant: -13),
+            body.topAnchor.constraint(equalTo: box.contentView!.topAnchor, constant: 13),
+            body.bottomAnchor.constraint(equalTo: box.contentView!.bottomAnchor, constant: -13)
         ])
         return box
     }
@@ -452,16 +504,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func buildWindow() {
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1060, height: 760),
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 660, height: 470),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.title = "MyBackup"
-        window.minSize = NSSize(width: 640, height: 600)
+        window.minSize = NSSize(width: 560, height: 380)
         window.backgroundColor = ModernStyle.beige
         window.appearance = NSAppearance(named: .aqua)
         window.delegate = self
         window.center()
         let content = window.contentView!
-        let scroll = NSScrollView()
+        let scroll = BackupScrollView()
+        dashboardScroll = scroll
         scroll.translatesAutoresizingMaskIntoConstraints = false
         scroll.drawsBackground = false
         scroll.hasVerticalScroller = true
@@ -474,7 +527,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             scroll.bottomAnchor.constraint(equalTo: content.bottomAnchor)
         ])
         let document = TopAlignedView()
-        document.translatesAutoresizingMaskIntoConstraints = false
+        document.frame = NSRect(x: 0, y: 0, width: 660, height: 470)
+        document.autoresizingMask = [.width]
         scroll.documentView = document
         let title = label("MyBackup", size: 25, weight: .semibold, color: ModernStyle.ink)
         let subtitle = label("Vos dossiers, sauvegardés sur Google Drive.", size: 13, color: ModernStyle.dimPhosphor)
@@ -499,7 +553,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         progressBar.maxValue = 100
         progressBar.isIndeterminate = false
         progressBar.setAccessibilityLabel("Progression de l’étape actuelle")
-        progressBar.heightAnchor.constraint(equalToConstant: 10).isActive = true
+        progressBar.heightAnchor.constraint(equalToConstant: 7).isActive = true
         metrics = []
         let metricViews = ["Créés", "Mis à jour", "Inchangés", "Erreurs"].map { name -> NSView in
             let value = label("—", size: 23, weight: .semibold, color: ModernStyle.ink)
@@ -538,12 +592,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         sidePanel = stack([card(stages), card(location)], spacing: 16)
         sidePanel.translatesAutoresizingMaskIntoConstraints = false
         sidePanel.arrangedSubviews.forEach { fillWidth($0, in: sidePanel) }
-        sideWidth = sidePanel.widthAnchor.constraint(equalToConstant: 300)
+        sideWidth = sidePanel.widthAnchor.constraint(equalToConstant: 190)
         sideWidth.isActive = true
         workspace = stack([mainCard, sidePanel], horizontal: true, spacing: 18)
         workspace.distribution = .fill
         workspace.alignment = .top
-        mainCard.widthAnchor.constraint(greaterThanOrEqualToConstant: 300).isActive = true
+        mainCard.widthAnchor.constraint(greaterThanOrEqualToConstant: 260).isActive = true
 
         let details = NSButton(checkboxWithTitle: "Afficher les détails", target: self, action: #selector(toggleDetails(_:)))
         details.setButtonType(.switch)
@@ -555,11 +609,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         detailsStack = stack([pathLabel, logs], spacing: 8)
         fillWidth(pathLabel, in: detailsStack)
         detailsStack.isHidden = true
-        startButton = NSButton(title: "Sauvegarder maintenant", target: self, action: #selector(startBackup))
-        startButton.bezelStyle = .rounded
+        startButton = BackupStartButton(title: "Sauvegarder maintenant", target: self, action: #selector(startBackup))
+        startButton.isBordered = false
+        startButton.focusRingType = .exterior
         startButton.keyEquivalent = "\r"
-        startButton.bezelColor = ModernStyle.phosphor
-        startButton.contentTintColor = .white
         stopButton = NSButton(title: "Arrêter la sauvegarde", target: self, action: #selector(stopBackup))
         stopButton.bezelStyle = .rounded
         stopButton.isHidden = true
@@ -574,11 +627,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         document.addSubview(root)
         root.arrangedSubviews.forEach { fillWidth($0, in: root) }
         NSLayoutConstraint.activate([
-            document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
-            root.leadingAnchor.constraint(equalTo: document.leadingAnchor, constant: 28),
-            root.trailingAnchor.constraint(equalTo: document.trailingAnchor, constant: -28),
-            root.topAnchor.constraint(equalTo: document.topAnchor, constant: 28),
-            root.bottomAnchor.constraint(equalTo: document.bottomAnchor, constant: -28)
+            root.leadingAnchor.constraint(equalTo: document.leadingAnchor, constant: 16),
+            root.trailingAnchor.constraint(equalTo: document.trailingAnchor, constant: -16),
+            root.topAnchor.constraint(equalTo: document.topAnchor, constant: 16)
         ])
         refreshLocation()
         windowDidResize(Notification(name: NSWindow.didResizeNotification, object: window))
@@ -586,6 +637,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @objc func toggleDetails(_ sender: NSButton) {
         detailsStack.isHidden = sender.state != .on
+        dashboardScroll.needsLayout = true
     }
 
     func refreshLocation() {
@@ -602,7 +654,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func windowDidResize(_ notification: Notification) {
         guard workspace != nil else { return }
-        let compact = window.contentView!.bounds.width < 900
+        let compact = window.contentView!.bounds.width < 620
         guard compactLayout != compact else { return }
         compactLayout = compact
         NSLayoutConstraint.deactivate(compactConstraints)

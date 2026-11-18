@@ -26,7 +26,7 @@ A source folder that is missing or cannot be scanned interrupts the run with an 
 
 ## Interface
 
-The native AppKit window uses a sage background, white cards and a solid green progress bar. The current phase, percentage, created/updated/unchanged/error counters and elapsed time are shown together. The progress percentage describes the current phase, rather than a global estimate. The right column shows the backup stages and configured source/destination; below 900 points it moves beneath the progress card. The window scrolls vertically when needed.
+The native AppKit window uses a sage background, white cards and a solid green progress bar. The current phase, percentage, created/updated/unchanged/error counters and elapsed time are shown together. The progress percentage describes the current phase, rather than a global estimate. The right column shows the backup stages and configured source/destination; below 620 points it moves beneath the progress card. The default window is 660 × 470 points (about 40% smaller than the initial dashboard), with reduced typography and a 10-point minimum for secondary text. The document scrolls vertically independently of the window: backend messages and long file paths cannot enlarge it. The primary action draws its white title on a green background explicitly, including when the window is inactive.
 
 **Sauvegarder maintenant** starts a run and is replaced by **Arrêter la sauvegarde** while it runs. **Afficher les détails** reveals the current path/status detail and a button to open the logs. Settings retain the existing source, destination, hidden-file and retention choices; saving refreshes the main window. Both windows use the light appearance shown in the design proposal and native controls for keyboard and accessibility support.
 
@@ -53,5 +53,13 @@ Run the offline regression suite using the bundled Python environment:
 ```sh
 MyBackup.app/Contents/Resources/venv/bin/python -m unittest discover -s tests -v
 ```
+
+Check native layout stability without starting a backup or changing saved preferences:
+
+```sh
+python3 tests/run_ui_checks.py
+```
+
+This sends long paths, large counters, progress and error events through the real UI handlers, checks that the window dimensions stay unchanged, and exercises disclosure and compact/wide layouts.
 
 Builds and the Swift module cache are prepared and verified in `.build` before replacing the application. The previous bundle is retained in the staging directory if a build or signing step fails.
